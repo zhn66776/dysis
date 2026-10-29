@@ -96,6 +96,8 @@ struct BridgeCommand: Decodable {
     var x: Double?, y: Double?, zoom: Double?
     var title: String?, text: String?, window: String?
     var modelID: String?, effort: String?, attachmentID: UUID?, template: String?
+    /// `confirm.answer`: the dialog ID Swift issued and whether the user clicked the action.
+    var id: UUID?, ok: Bool?
 }
 
 enum BridgeEncoding {
@@ -195,6 +197,8 @@ final class CanvasBridge: NSObject, ObservableObject, WKScriptMessageHandler {
     private var sentChain: BridgeChain = .idle
     private var sentQuotas: [String: BridgeQuota]?
     private var sentDrafts: [UUID: BridgeDraft] = [:]
+    /// Open confirmations; each runs at most once, and only on `confirm.answer` with ok.
+    private var pendingConfirms: [UUID: () -> Void] = [:]
     /// The session whose panel is open (first watched ID); file drops go here.
     private(set) var panelSessionID: UUID?
     private var observers: Set<AnyCancellable> = []
@@ -235,8 +239,13 @@ final class CanvasBridge: NSObject, ObservableObject, WKScriptMessageHandler {
         switch c.type {
         case "ready":
             ready = true
+            // A reloaded page no longer shows earlier dialogs; treat them as declined.
+            pendingConfirms = [:]
             push(reset: true)
             return
+        case "confirm.answer":
+            guard let id = c.id, let perform = pendingConfirms.removeValue(forKey: id) else { return }
+            if c.ok == true { perform() }
         case "board.create": canvas.createBoard()
         case "board.select": if let id = c.boardID { canvas.selectBoard(id) }
         case "board.rename": if let id = c.boardID, let title = c.title { canvas.renameBoard(id, title: title) }
@@ -348,16 +357,14 @@ final class CanvasBridge: NSObject, ObservableObject, WKScriptMessageHandler {
         schedulePush()
     }
 
+    /// Asks the page to show its confirmation dialog (`confirm.show`). The
+    /// action runs only when the page answers this ID with ok after a click;
+    /// cancel, Esc or a reload decline it.
     private func confirm(title: String, detail: String, action: String, perform: @escaping () -> Void) {
-        let alert = NSAlert()
-        alert.messageText = title
-        alert.informativeText = detail
-        alert.alertStyle = .warning
-        alert.addButton(withTitle: action).hasDestructiveAction = true
-        alert.addButton(withTitle: "取消")
-        if let window = webView?.window {
-            alert.beginSheetModal(for: window) { if $0 == .alertFirstButtonReturn { perform() } }
-        } else if alert.runModal() == .alertFirstButtonReturn { perform() }
+        guard ready, webView != nil else { return }
+        let id = UUID()
+        pendingConfirms[id] = perform
+        evaluate(["type": "confirm.show", "id": id.uuidString, "title": title, "detail": detail, "action": action])
     }
 
     // MARK: Pushing state

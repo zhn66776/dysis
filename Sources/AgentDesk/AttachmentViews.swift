@@ -88,30 +88,39 @@ struct AttachmentStrip: View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
                 ForEach(attachments) { file in
-                    HStack(spacing: 8) {
+                    HStack(spacing: 6) {
                         if file.isImage, let image = AttachmentThumbnail.load(file, root: root) {
-                            Image(nsImage: image).resizable().scaledToFill().frame(width: 42, height: 42).clipped().cornerRadius(6)
+                            Image(nsImage: image).resizable().scaledToFill().frame(width: 30, height: 30).clipped().cornerRadius(5)
                         } else {
-                            Image(systemName: file.kind == .pdf ? "doc.richtext" : "doc.text")
-                                .font(.title3).foregroundStyle(.secondary).frame(width: 32)
+                            Text(Self.kindLabel(file)).font(Theme.sans(10, weight: .medium)).foregroundStyle(Theme.muted)
                         }
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(file.displayName).font(.caption.weight(.medium)).lineLimit(1)
-                            Text(ByteCountFormatter.string(fromByteCount: file.byteCount, countStyle: .file)).font(.caption2).foregroundStyle(.secondary)
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(file.displayName).font(Theme.sans(11)).foregroundStyle(Theme.text).lineLimit(1)
+                            Text(ByteCountFormatter.string(fromByteCount: file.byteCount, countStyle: .file)).metaText(10)
                         }.frame(maxWidth: 180, alignment: .leading)
                         if let onRemove {
-                            Button { onRemove(file.id) } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }
+                            Button("✕") { onRemove(file.id) }
+                                .font(.system(size: 10)).foregroundStyle(Theme.muted)
                                 .buttonStyle(.plain).help("移除附件")
                         }
                     }
-                    .padding(8).background(.quaternary.opacity(0.45), in: RoundedRectangle(cornerRadius: 10))
+                    .padding(.vertical, 4).padding(.leading, 7).padding(.trailing, 6)
+                    .background(Theme.chip, in: RoundedRectangle(cornerRadius: 7))
                     .help(file.extractionNote ?? file.displayName)
                     .contextMenu {
                         Button("在访达中显示") { NSWorkspace.shared.activateFileViewerSelecting([file.storedURL(root: root)]) }
                     }
                 }
             }
-        }.frame(maxHeight: 70)
+        }.frame(maxHeight: 48)
+    }
+
+    /// Plain-text kind tag, like the canvas `.file-kind`.
+    private static func kindLabel(_ file: ChatAttachment) -> String {
+        switch file.kind {
+        case .pdf: return "PDF"
+        default: return file.displayName.split(separator: ".").last.map { String($0).uppercased() }.flatMap { $0.count <= 4 ? $0 : nil } ?? "文档"
+        }
     }
 }
 
@@ -139,25 +148,36 @@ struct AttachmentNotice: View {
             }
             if !supportsImages && attachments.contains(where: \.isImage) {
                 Text("当前 Cursor 连接暂不支持图片输入，请选择 Claude 或 ChatGPT。")
-                    .foregroundStyle(.orange)
+                    .foregroundStyle(Theme.warn)
             }
             ForEach(attachments.filter { !$0.isImage && $0.extractionNote != nil }) { file in
                 Text("\(file.displayName)：\(file.extractionNote ?? "")")
             }
-        }.font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+        }.font(Theme.sans(10)).foregroundStyle(Theme.muted).fixedSize(horizontal: false, vertical: true)
     }
 }
 
 struct ReplyExportMenu: View {
     let text: String
     let title: String
+    @State private var failure: String?
+
     var body: some View {
         Menu {
-            Button("导出为 PDF") { _ = ReplyExporter.presentSavePanel(text: text, title: title, format: .pdf) }
-            Button("导出为图片 PNG") { _ = ReplyExporter.presentSavePanel(text: text, title: title, format: .png) }
-            Button("导出为文本") { _ = ReplyExporter.presentSavePanel(text: text, title: title, format: .text) }
-        } label: { Label("导出", systemImage: "square.and.arrow.up") }
-        .menuStyle(.borderlessButton).fixedSize().font(.caption).disabled(text.isEmpty)
+            Button("导出为 PDF") { export(.pdf) }
+            Button("导出为图片 PNG") { export(.png) }
+            Button("导出为文本") { export(.text) }
+        } label: { Text("导出") }
+        .menuStyle(.button).buttonStyle(ActionChipStyle()).menuIndicator(.hidden).fixedSize().disabled(text.isEmpty)
         .help("把这条回复保存为文件")
+        .sheet(isPresented: Binding(get: { failure != nil }, set: { if !$0 { failure = nil } })) {
+            ThemedDialog(title: "导出失败", detail: failure ?? "", onAction: {}) { failure = nil }
+        }
+    }
+
+    private func export(_ format: ReplyExportFormat) {
+        do { _ = try ReplyExporter.presentSavePanel(text: text, title: title, format: format) }
+        catch { failure = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription }
     }
 }
+

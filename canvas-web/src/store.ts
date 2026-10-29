@@ -1,4 +1,4 @@
-import type { AppState, StatePayload } from './types'
+import type { AppState, ConfirmShow, StatePayload } from './types'
 
 export const initialState: AppState = {
   ready: false,
@@ -45,4 +45,14 @@ export function applyState(prev: AppState, p: StatePayload): AppState {
     drafts,
     chain: p.chain ?? prev.chain,
   }
+}
+
+/** Confirmations waiting for an answer, oldest first; only the first is shown. */
+export function enqueueConfirm(queue: ConfirmShow[], request: ConfirmShow): ConfirmShow[] {
+  return queue.some(c => c.id === request.id) ? queue : [...queue, request]
+}
+
+/** Drops an answered (or declined) confirmation. */
+export function resolveConfirm(queue: ConfirmShow[], id: string): ConfirmShow[] {
+  return queue.filter(c => c.id !== id)
 }

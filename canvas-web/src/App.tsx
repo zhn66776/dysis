@@ -1,22 +1,25 @@
-import { useEffect, useReducer, useState } from 'react'
+import { useCallback, useEffect, useReducer, useState } from 'react'
 import { ReactFlowProvider } from '@xyflow/react'
 import { isNative, send, subscribe } from './bridge'
 import { Canvas } from './Canvas'
 import { ChatPanel } from './ChatPanel'
+import { ConfirmDialog } from './ConfirmDialog'
 import { Sidebar } from './Sidebar'
-import { applyState, initialState } from './store'
-import type { AppState, StatePayload } from './types'
+import { applyState, enqueueConfirm, initialState, resolveConfirm } from './store'
+import type { AppState, ConfirmShow, StatePayload } from './types'
 
 export function App() {
   const [state, dispatch] = useReducer((s: AppState, p: StatePayload) => applyState(s, p), initialState)
   const [selectedNodeID, setSelectedNodeID] = useState<string | null>(null)
   const [drafts, setDrafts] = useState<Record<string, string>>({})
   const [collapsed, setCollapsed] = useState(false)
+  const [confirms, setConfirms] = useState<ConfirmShow[]>([])
 
   useEffect(() => {
     const off = subscribe(p => {
       if (p.type === 'state') dispatch(p)
       else if (p.type === 'composer.insert') setDrafts(d => ({ ...d, [p.sessionID]: (d[p.sessionID] ? d[p.sessionID] + '\n\n' : '') + p.text }))
+      else if (p.type === 'confirm.show') setConfirms(q => enqueueConfirm(q, p))
     })
     send({ type: 'ready' })
     return off
@@ -43,6 +46,13 @@ export function App() {
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [node])
+
+  const confirm = confirms[0]
+  const answer = useCallback((ok: boolean) => {
+    if (!confirm) return
+    send({ type: 'confirm.answer', id: confirm.id, ok })
+    setConfirms(q => resolveConfirm(q, confirm.id))
+  }, [confirm])
 
   if (!state.ready) return <div className="loading">正在载入…</div>
 
@@ -73,6 +83,7 @@ export function App() {
           onClose={() => setSelectedNodeID(null)}
         />
       )}
+      {confirm && <ConfirmDialog key={confirm.id} request={confirm} onAnswer={answer} />}
     </div>
   )
 }

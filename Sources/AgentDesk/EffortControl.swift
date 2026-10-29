@@ -31,7 +31,7 @@ struct EffortControl: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
             HStack(spacing: 8) {
-                Menu {
+                ThemedMenu(title: "推理：\(display)") {
                     if !usesVariants {
                         Button("官方默认") { effort = nil }
                         Divider()
@@ -49,18 +49,14 @@ struct EffortControl: View {
                         Divider()
                         Button("刷新可用档位") { discover() }
                     }
-                } label: {
-                    Label("推理：\(display)", systemImage: "brain")
                 }
-                .menuStyle(.borderlessButton)
-                .fixedSize()
                 if choices.isEmpty && provider != .claude {
                     Button(model.isChecking.contains(provider) ? "读取中…" : "读取档位") { discover() }
-                        .font(.caption).buttonStyle(.borderless).disabled(model.isChecking.contains(provider))
+                        .buttonStyle(GhostButtonStyle()).disabled(model.isChecking.contains(provider))
                 }
             }
             if !compact {
-                Text(guidance).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                Text(guidance).font(Theme.sans(11)).foregroundStyle(Theme.muted).fixedSize(horizontal: false, vertical: true)
             }
         }
         .help(guidance)

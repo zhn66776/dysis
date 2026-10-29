@@ -40,61 +40,79 @@ public struct MCPWorkbenchView: View {
     }
 
     public var body: some View {
-        NavigationSplitView {
-            List(selection: $selectedServerID) {
-                Section("MCP 服务器") {
-                    ForEach(servers) { server in
-                        HStack(spacing: 8) {
-                            Image(systemName: server.enabled ? "network" : "pause.circle")
-                                .foregroundStyle(server.enabled ? Color.accentColor : Color.secondary)
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(server.name.isEmpty ? "未命名服务器" : server.name)
-                                Text(Self.transportLabel(server.transport))
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
-                        .tag(server.id)
-                    }
-                    .onDelete(perform: deleteServers)
-                }
-            }
-            .toolbar {
-                ToolbarItem(placement: .primaryAction) {
-                    Button(action: addServer) { Label("添加", systemImage: "plus") }
-                }
-            }
-            .frame(minWidth: 230)
-        } detail: {
-            if let index = selectedIndex {
-                serverDetail(index: index)
-            } else {
-                VStack(spacing: 14) {
-                    ContentUnavailableView("选择一个 MCP 服务器", systemImage: "network", description: Text("添加服务器后，在这里检查工具并手动调用。"))
-                    Button("添加服务器", action: addServer).buttonStyle(.borderedProminent).disabled(configurationLoadError != nil)
-                }
-            }
-        }
-        .toolbar {
-            ToolbarItem(placement: .cancellationAction) {
+        VStack(spacing: 0) {
+            HStack(spacing: 10) {
+                Text("MCP 工作台").titleText(16)
+                Text("手动检查和调用工具；只在你按“运行工具”时调用。").metaText()
+                Spacer()
                 Button("完成") { operationTask?.cancel(); client?.cancel(); dismiss() }
+                    .buttonStyle(PrimaryButtonStyle())
+                    .keyboardShortcut(.cancelAction)
             }
-        }
-        .overlay(alignment: .top) {
+            .padding(.horizontal, 18).padding(.vertical, 12)
+            Hairline()
             if let configurationLoadError {
-                HStack(spacing: 8) {
-                    Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
-                    Text(configurationLoadError).font(.callout)
-                    Spacer()
-                    Button("重置配置…") { resetCorruptConfiguration() }.buttonStyle(.borderless)
+                ThemedErrorBanner(message: configurationLoadError, actionTitle: "重置配置…") { resetCorruptConfiguration() }
+                    .padding(.horizontal, 14).padding(.top, 10)
+            }
+            HStack(spacing: 0) {
+                serverList.frame(width: 240)
+                Hairline(vertical: true)
+                Group {
+                    if let index = selectedIndex {
+                        serverDetail(index: index)
+                    } else {
+                        VStack(spacing: 8) {
+                            Text("选择一个 MCP 服务器").titleText(18)
+                            Text("添加服务器后，在这里检查工具并手动调用。").font(Theme.sans(12)).foregroundStyle(Theme.muted)
+                            Button("添加服务器", action: addServer).buttonStyle(PrimaryButtonStyle()).disabled(configurationLoadError != nil).padding(.top, 6)
+                        }
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    }
                 }
-                .padding(10)
-                .background(.regularMaterial)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
+        .themedSurface()
+        .presentationBackground(Theme.bg)
         .onChange(of: selectedServerID) { _, _ in clearInspection() }
         .onDisappear { operationTask?.cancel(); client?.cancel(); client = nil }
         .frame(minWidth: 850, minHeight: 650)
+    }
+
+    private var serverList: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack {
+                Text("MCP 服务器").sectionLabel()
+                Spacer()
+                Button("+ 添加", action: addServer).buttonStyle(GhostButtonStyle()).disabled(configurationLoadError != nil)
+            }
+            .padding(.leading, 8).padding(.bottom, 4)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 1) {
+                    ForEach(servers) { server in
+                        let on = server.id == selectedServerID
+                        Button { selectedServerID = server.id } label: {
+                            HStack(spacing: 8) {
+                                Circle().fill(server.enabled ? Theme.ok : Theme.muted2).frame(width: 6, height: 6)
+                                VStack(alignment: .leading, spacing: 1) {
+                                    Text(server.name.isEmpty ? "未命名服务器" : server.name).font(Theme.sans(13)).foregroundStyle(on ? Theme.text : Theme.muted).lineLimit(1)
+                                    Text(Self.transportLabel(server.transport)).metaText(10).lineLimit(1)
+                                }
+                                Spacer(minLength: 0)
+                            }
+                        }
+                        .buttonStyle(GhostButtonStyle(selected: on, fullWidth: true))
+                        .contextMenu {
+                            Button("删除服务器", role: .destructive) { if let i = servers.firstIndex(where: { $0.id == server.id }) { deleteServers(IndexSet(integer: i)) } }
+                        }
+                    }
+                }
+            }
+        }
+        .padding(10)
+        .frame(maxHeight: .infinity, alignment: .top)
+        .background(Theme.side)
     }
 
     private var selectedIndex: Int? {
@@ -106,95 +124,89 @@ public struct MCPWorkbenchView: View {
     private func serverDetail(index: Int) -> some View {
         let server = servers[index]
         ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
-                HStack {
-                    TextField("服务器名称", text: binding(index, keyPath: \.name))
-                        .textFieldStyle(.roundedBorder)
-                        .font(.title2.weight(.semibold))
-                    Toggle("启用", isOn: binding(index, keyPath: \.enabled))
-                        .toggleStyle(.switch)
-                        .fixedSize()
-                }
-                GroupBox("连接") {
-                    VStack(alignment: .leading, spacing: 10) {
-                        Picker("传输", selection: transportBinding(index)) {
-                            Text("本地 stdio").tag(MCPTransportChoice.stdio)
-                            Text("Streamable HTTP").tag(MCPTransportChoice.http)
-                        }
-                        .pickerStyle(.segmented)
-                        switch server.transport {
-                        case .stdio:
-                            TextField("可执行文件（不经过 shell）", text: stdioCommandBinding(index))
-                                .textFieldStyle(.roundedBorder)
-                            VStack(alignment: .leading, spacing: 3) {
-                                Text("参数（每行一个）").font(.caption).foregroundStyle(.secondary)
-                                TextEditor(text: stdioArgumentsBinding(index))
-                                    .font(.system(.body, design: .monospaced))
-                                    .frame(minHeight: 58, maxHeight: 120)
-                                    .overlay(RoundedRectangle(cornerRadius: 6).stroke(.quaternary))
-                            }
-                        case .streamableHTTP:
-                            TextField("https://example.com/mcp", text: httpURLBinding(index))
-                                .textFieldStyle(.roundedBorder)
-                        }
-                        TextField("允许传给 stdio 子进程的环境变量名（逗号分隔）", text: envBinding(index))
-                            .textFieldStyle(.roundedBorder)
-                        Text("不会保存环境变量值、OAuth Token 或 API Key。远程 OAuth 登录尚未实现，官方客户端的登录状态不会自动认证这个 URL；请使用已配置认证的远程地址，或使用本地 stdio 桥接。")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                    .padding(5)
-                }
+            VStack(alignment: .leading, spacing: 14) {
                 HStack(spacing: 10) {
-                    Button(action: { test(index: index) }) { Label("测试连接", systemImage: "checkmark.shield") }.disabled(running)
-                    Button(action: { discover(index: index) }) { Label("发现工具", systemImage: "list.bullet.rectangle") }.disabled(running)
-                    if running { Button(action: stop) { Label("停止", systemImage: "stop.fill") }.tint(.orange) }
+                    TextField("服务器名称", text: binding(index, keyPath: \.name))
+                        .textFieldStyle(.plain)
+                        .font(Theme.sans(17, weight: .medium))
+                    Toggle("启用", isOn: binding(index, keyPath: \.enabled))
+                        .toggleStyle(ThemedSwitchStyle())
+                        .fixedSize()
+                    Button("删除") { deleteServers(IndexSet(integer: index)) }
+                        .buttonStyle(SecondaryButtonStyle(destructive: true))
+                }
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("连接").sectionLabel()
+                    SegmentedChoice(selection: transportBinding(index), options: [(MCPTransportChoice.stdio, "本地 stdio"), (MCPTransportChoice.http, "Streamable HTTP")])
+                    switch server.transport {
+                    case .stdio:
+                        TextField("可执行文件（不经过 shell）", text: stdioCommandBinding(index))
+                            .themedField(mono: true)
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("参数（每行一个）").font(Theme.sans(11)).foregroundStyle(Theme.muted)
+                            TextEditor(text: stdioArgumentsBinding(index))
+                                .themedEditor(mono: true)
+                                .frame(minHeight: 58, maxHeight: 120)
+                        }
+                    case .streamableHTTP:
+                        TextField("https://example.com/mcp", text: httpURLBinding(index))
+                            .themedField(mono: true)
+                    }
+                    TextField("允许传给 stdio 子进程的环境变量名（逗号分隔）", text: envBinding(index))
+                        .themedField(mono: true)
+                    Text("不会保存环境变量值、OAuth Token 或 API Key。远程 OAuth 登录尚未实现，官方客户端的登录状态不会自动认证这个 URL；请使用已配置认证的远程地址，或使用本地 stdio 桥接。")
+                        .font(Theme.sans(11))
+                        .foregroundStyle(Theme.muted)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .themedCard()
+                HStack(spacing: 8) {
+                    Button("测试连接") { test(index: index) }.buttonStyle(SecondaryButtonStyle()).disabled(running)
+                    Button("发现工具") { discover(index: index) }.buttonStyle(SecondaryButtonStyle()).disabled(running)
+                    if running { Button("停止", action: stop).buttonStyle(SecondaryButtonStyle(destructive: true)) }
                     Spacer()
-                    Text(statusText).font(.caption).foregroundStyle(.secondary)
+                    Text(statusText).metaText().foregroundStyle(running ? Theme.run : Theme.muted)
                 }
                 if !tools.isEmpty {
-                    GroupBox("工具（手动调用）") {
-                        VStack(alignment: .leading, spacing: 10) {
-                            Picker("工具", selection: Binding(get: { selectedToolName ?? "" }, set: { name in selectedToolName = name; argumentsJSON = "{}" })) {
-                                Text("选择工具").tag("")
-                                ForEach(tools) { tool in Text(tool.title ?? tool.name).tag(tool.name) }
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text("工具（手动调用）").sectionLabel()
+                        ThemedPicker(selection: Binding(get: { selectedToolName ?? "" }, set: { name in selectedToolName = name; argumentsJSON = "{}" }),
+                                     options: [("", "选择工具")] + tools.map { ($0.name, $0.title ?? $0.name) })
+                        if let name = selectedToolName, let tool = tools.first(where: { $0.name == name }) {
+                            Text(tool.description ?? tool.name).font(Theme.sans(12)).foregroundStyle(Theme.muted)
+                            if let schema = tool.inputSchema {
+                                SchemaDisclosure(text: schema.prettyJSONString)
                             }
-                            if let name = selectedToolName, let tool = tools.first(where: { $0.name == name }) {
-                                Text(tool.description ?? tool.name).font(.callout).foregroundStyle(.secondary)
-                                if let schema = tool.inputSchema {
-                                    DisclosureGroup("输入 Schema") { Text(schema.prettyJSONString).font(.system(.caption, design: .monospaced)).textSelection(.enabled) }
-                                }
-                                TextEditor(text: $argumentsJSON)
-                                    .font(.system(.body, design: .monospaced))
-                                    .frame(minHeight: 90)
-                                    .overlay(RoundedRectangle(cornerRadius: 6).stroke(.quaternary))
-                                Button(action: { call(index: index, name: name) }) { Label("运行工具", systemImage: "play.fill") }
-                                    .buttonStyle(.borderedProminent)
-                                    .disabled(running)
-                            }
+                            TextEditor(text: $argumentsJSON)
+                                .themedEditor(mono: true)
+                                .frame(minHeight: 90)
+                            Button("运行工具") { call(index: index, name: name) }
+                                .buttonStyle(PrimaryButtonStyle())
+                                .disabled(running)
                         }
-                        .padding(5)
                     }
+                    .themedCard()
                 }
                 if !resultText.isEmpty {
-                    GroupBox("最近结果") {
-                        VStack(alignment: .leading, spacing: 8) {
-                            ScrollView { Text(resultText).font(.system(.body, design: .monospaced)).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading) }
-                                .frame(minHeight: 100, maxHeight: 260)
-                            HStack {
-                                Button("附加到\(targetLabel)") { onAttach(resultText) }
-                                    .disabled(!canAttach)
-                                Spacer()
-                            }
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("最近结果").sectionLabel()
+                        ScrollView { Text(resultText).font(Theme.mono(12)).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading) }
+                            .frame(minHeight: 100, maxHeight: 260)
+                            .padding(8)
+                            .background(Theme.chip, in: RoundedRectangle(cornerRadius: 8))
+                        HStack {
+                            Button("附加到\(targetLabel)") { onAttach(resultText) }
+                                .buttonStyle(SecondaryButtonStyle())
+                                .disabled(!canAttach)
+                            Spacer()
                         }
-                        .padding(5)
                     }
+                    .themedCard()
                 }
             }
             .padding(22)
             .frame(maxWidth: 760, alignment: .leading)
         }
-        .navigationTitle("MCP 工作台")
     }
 
     private enum MCPTransportChoice: String { case stdio, http }
@@ -275,4 +287,20 @@ public struct MCPWorkbenchView: View {
     private func stop() { operationTask?.cancel(); client?.cancel(); statusText = "正在停止…" }
 
     private static func transportLabel(_ transport: MCPTransport) -> String { switch transport { case .stdio(let command, _): return command.isEmpty ? "stdio" : "stdio · \(command)"; case .streamableHTTP(let url): return url.isEmpty ? "HTTP" : "HTTP · \(url)" } }
+}
+
+/// "输入 Schema" fold-out with a plain-text caret instead of a disclosure triangle.
+private struct SchemaDisclosure: View {
+    let text: String
+    @State private var open = false
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Button((open ? "▾ " : "▸ ") + "输入 Schema") { open.toggle() }.buttonStyle(GhostButtonStyle())
+            if open {
+                Text(text).font(Theme.mono(11)).foregroundStyle(Theme.text).textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(8).background(Theme.chip, in: RoundedRectangle(cornerRadius: 8))
+            }
+        }
+    }
 }

@@ -56,8 +56,10 @@ public enum ReplyExporter {
         }
     }
 
+    /// Returns nil when the user cancels; export errors are thrown so the
+    /// caller can show them in its own (themed) dialog.
     @MainActor
-    public static func presentSavePanel(text: String, title: String, format: ReplyExportFormat, window: NSWindow? = nil) -> URL? {
+    public static func presentSavePanel(text: String, title: String, format: ReplyExportFormat, window: NSWindow? = nil) throws -> URL? {
         let panel = NSSavePanel()
         panel.title = "导出回复"
         panel.nameFieldStringValue = safeFilename(title) + "." + format.fileExtension
@@ -65,24 +67,8 @@ public enum ReplyExporter {
         panel.canCreateDirectories = true
         let response = window.map { _ in panel.runModal() } ?? panel.runModal()
         guard response == .OK, let url = panel.url else { return nil }
-        do {
-            try export(text: text, title: title, format: format, to: url)
-            return url
-        } catch let error as LocalizedError {
-            let alert = NSAlert()
-            alert.messageText = "导出失败"
-            alert.informativeText = error.errorDescription ?? "无法导出回复。"
-            alert.alertStyle = .warning
-            alert.runModal()
-            return nil
-        } catch {
-            let alert = NSAlert()
-            alert.messageText = "导出失败"
-            alert.informativeText = error.localizedDescription
-            alert.alertStyle = .warning
-            alert.runModal()
-            return nil
-        }
+        try export(text: text, title: title, format: format, to: url)
+        return url
     }
 
     private static func writePDF(_ text: String, title: String, to url: URL) throws {

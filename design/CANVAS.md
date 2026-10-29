@@ -71,7 +71,7 @@
 
 - **已过期**：一个节点已经回答过，但它的某条数据线上有它还没收到的新回复，就标成“● 上游已更新”，边框变黄。继承线不算：分支的起点是固定的。
 - **用新输入重新回答**：过期节点的面板里有这个按钮，调用 1 次。发送的是“上游节点有了新的输出。请基于新的输入，重新回答这个问题：”加上它上一次的问题，同时带上新的上游输出。
-- **重跑下游**：如果某个节点的直接下游已经过期，节点右下角会出现“▶ 重跑下游 N”，面板里也有同样的按钮。N 是沿数据线能到达、而且已经运行过的节点数。点击后先弹出原生确认框，列出调用次数和顺序；确认后按依赖顺序逐个运行，每个节点等上一个完成才开始。
+- **重跑下游**：如果某个节点的直接下游已经过期，节点右下角会出现“▶ 重跑下游 N”，面板里也有同样的按钮。N 是沿数据线能到达、而且已经运行过的节点数。点击后先在画布内弹出确认框，列出调用次数和顺序；确认后按依赖顺序逐个运行，每个节点等上一个完成才开始。
 - 某个节点失败或停止时，后面的节点不再运行。顶栏显示“正在重跑 2 / 4”，可以随时停止。一次最多 12 个节点，和讨论室的上限一样。
 - 不会自动重跑，也不会自动重试。
 
@@ -121,6 +121,8 @@ Provider 色（主色 / 浅色头部 / 深色头部）：
 
 颜色只用在节点头部底色和连线上；正文和卡片底色保持中性。provider 图标使用项目自带的 SVG。
 
+原生窗口（设置、经典界面、MCP 工作台）用同一套颜色和字体，定义在 `Sources/AgentDesk/Theme.swift`：按钮、输入框、下拉菜单、分段选择、开关、卡片和确认框都按这里的样式绘制。系统文件面板（打开、保存）和菜单栏保持原生。
+
 ### 3.3 节点状态
 
 | 状态 | 表现 |
@@ -140,7 +142,7 @@ Provider 色（主色 / 浅色头部 / 深色头部）：
 | 打开对话 | 单击节点 |
 | 从回复分支 | 面板里回复下方的“从这里分支” |
 | 连数据线 | 从右侧输出口拖到另一个节点的左侧输入口 |
-| 删除线或节点 | 选中后按 Delete。删除节点会弹出原生确认框，只删除本地记录，不删除官方历史 |
+| 删除线或节点 | 选中后按 Delete。删除节点会在画布内弹出确认框，只删除本地记录，不删除官方历史 |
 | 发送 | Enter；Shift+Enter 换行；输入法组字时 Enter 不发送 |
 
 ## 4. 架构
@@ -178,10 +180,10 @@ Provider 色（主色 / 浅色头部 / 深色头部）：
 | type | 字段 | 作用 |
 |---|---|---|
 | `ready` | — | 网页加载完成，请求完整快照 |
-| `board.create` / `board.select` / `board.rename` / `board.delete` | `boardID`、`title` | 管理画布；删除画布会弹出原生确认框 |
+| `board.create` / `board.select` / `board.rename` / `board.delete` | `boardID`、`title` | 管理画布；删除画布前先确认（`confirm.show`） |
 | `node.create` | `boardID`、`provider`、`x`、`y`、`connectFrom?` | 新建对话节点；带 `connectFrom` 时同时连一条数据线 |
 | `node.move` | `boardID`、`positions: [{nodeID, x, y}]` | 拖动结束后保存位置 |
-| `node.delete` | `boardID`、`nodeIDs` | 删除节点（原生确认） |
+| `node.delete` | `boardID`、`nodeIDs` | 删除节点（先确认） |
 | `node.rename` | `sessionID`、`title` | 改名 |
 | `node.branch` | `boardID`、`nodeID`、`messageID` | 从某条回复分支 |
 | `edge.create` | `boardID`、`source`、`target` | 新建数据线（会拒绝自环、重复线和环路） |
@@ -196,9 +198,10 @@ Provider 色（主色 / 浅色头部 / 深色头部）：
 | `session.setModel` / `session.setEffort` | `sessionID`、`modelID` / `effort` | 切换下一条消息的模型或推理档位（Cursor 档位换成同系列的模型 ID） |
 | `node.merge` | `boardID`、`nodeIDs`、`provider`、`template: compare / summarize / critique` | 新建合流节点并连好数据线，模板放进输入框 |
 | `node.rerun` | `boardID`、`nodeID` | 过期节点带上新输入重新回答（1 次调用） |
-| `chain.downstream` / `chain.stop` | `boardID`、`nodeID` | 原生确认后按顺序重跑下游；停止正在进行的重跑 |
+| `chain.downstream` / `chain.stop` | `boardID`、`nodeID` | 确认后按顺序重跑下游；停止正在进行的重跑 |
 | `provider.refresh` | `provider` | 读取模型和档位列表（连接检查，不发起模型回合） |
 | `attachment.choose` / `attachment.remove` | `sessionID`、`attachmentID` | 用原生文件面板添加文件，或移除待发送文件 |
+| `confirm.answer` | `id`、`ok` | 回答 `confirm.show`；只有点击操作按钮时 `ok` 为 true |
 
 Swift → 网页：`window.agentDesk.receive(payload)`
 
@@ -207,7 +210,10 @@ Swift → 网页：`window.agentDesk.receive(payload)`
 | `snapshot` | 画布列表、当前画布、全部会话摘要（标题、provider、模型、最后一条回复的预览、状态）、被关注会话的完整消息、运行状态、错误 |
 | `patch` | 摘要变化、被关注会话的新增或替换消息、文字增量（`append`） |
 | `composer.insert` | 把 MCP 结果插入某个节点的输入框 |
+| `confirm.show` | `id`、`title`、`detail`、`action`：在页面内显示确认框（删除画布、删除节点、重跑下游） |
 | `state` 里的 `models` / `quotas` / `drafts` | 各 provider 的模型选项、额度窗口、被关注会话的待发送文件 |
+
+确认框：删除和会花调用次数的操作（`board.delete`、`node.delete`、`chain.downstream`）不会直接执行。Swift 记下待执行的操作并发出 `confirm.show`；页面显示确认框，焦点默认在“取消”，Esc、取消和点击遮罩都会回答 `ok: false`，只有点击操作按钮才回答 `ok: true`。Swift 只执行自己发出且尚未回答过的 `id`，每个 `id` 只执行一次；页面重新加载（再次发送 `ready`）时，所有未回答的确认都视为取消。
 
 推送合并：Swift 监听模型变化，每 33ms 最多推一次；流式输出时只发增量文字，不发整段历史。图片和附件不走这条通道。
 

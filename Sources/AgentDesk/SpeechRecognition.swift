@@ -264,11 +264,11 @@ public struct DictationButton: View {
                 controller.start(appendingTo: text)
             }
         } label: {
-            Label(controller.state.isBusy ? "停止听写" : "听写", systemImage: controller.state.isBusy ? "stop.circle.fill" : "mic.fill")
+            Text(controller.state.isBusy ? "停止听写" : "听写")
+                .foregroundStyle(controller.state.isRecording ? Theme.warn : Theme.muted)
         }
         .disabled(!isEnabled)
-        .buttonStyle(.bordered)
-        .tint(controller.state.isRecording ? .orange : .accentColor)
+        .buttonStyle(GhostButtonStyle(selected: controller.state.isRecording))
         .help(controller.state.isRecording ? "停止听写" : "开始本机听写")
         .onChange(of: controller.transcript) { _, value in
             // Partial recognition results replace the previous partial result;
@@ -287,10 +287,8 @@ public struct DictationButton: View {
             if !enabled { controller.stop() }
         }
         .onDisappear { controller.stop() }
-        .alert("听写未完成", isPresented: Binding(get: { controller.errorMessage != nil }, set: { if !$0 { controller.clearError() } })) {
-            Button("好") { controller.clearError() }
-        } message: {
-            Text(controller.errorMessage ?? "")
+        .sheet(isPresented: Binding(get: { controller.errorMessage != nil }, set: { if !$0 { controller.clearError() } })) {
+            ThemedDialog(title: "听写未完成", detail: controller.errorMessage ?? "", onAction: {}) { controller.clearError() }
         }
     }
 }
@@ -299,11 +297,9 @@ public struct SpeechLocalePicker: View {
     @ObservedObject private var controller: SpeechRecognitionController
     public init(controller: SpeechRecognitionController) { self.controller = controller }
     public var body: some View {
-        Picker("听写语言", selection: Binding(get: { controller.localeIdentifier }, set: { controller.setLocaleIdentifier($0) })) {
-            Text("中文（简体）").tag("zh-CN")
-            Text("English（UK）").tag("en-GB")
-            Text("English（US）").tag("en-US")
-        }
+        ThemedPicker(selection: Binding(get: { controller.localeIdentifier }, set: { controller.setLocaleIdentifier($0) }),
+                     options: [("zh-CN", "中文（简体）"), ("en-GB", "English（UK）"), ("en-US", "English（US）")])
         .disabled(controller.state.isBusy)
+        .help("听写语言")
     }
 }

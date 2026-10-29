@@ -64,3 +64,20 @@ describe('plainPreview', () => {
     expect(plainPreview('1. **订阅制**：月付\n## 标题 [链接](https://x.y) `code`')).toBe('1. 订阅制：月付 标题 链接 code')
   })
 })
+
+import { enqueueConfirm, resolveConfirm } from './store'
+
+describe('confirm queue', () => {
+  const ask = (id: string) => ({ type: 'confirm.show' as const, id, title: `删除 ${id}？`, detail: '', action: '删除' })
+
+  it('shows requests in order and ignores a repeated ID', () => {
+    const q = enqueueConfirm(enqueueConfirm(enqueueConfirm([], ask('a')), ask('b')), ask('a'))
+    expect(q.map(c => c.id)).toEqual(['a', 'b'])
+  })
+
+  it('drops only the answered request', () => {
+    const q = resolveConfirm([ask('a'), ask('b')], 'a')
+    expect(q.map(c => c.id)).toEqual(['b'])
+    expect(resolveConfirm(q, 'missing')).toEqual(q)
+  })
+})
