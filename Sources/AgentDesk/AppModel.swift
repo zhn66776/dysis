@@ -271,7 +271,7 @@ final class AppModel: ObservableObject {
 
     func checkProvider(_ provider: ProviderID) async {
         guard !isChecking.contains(provider), let store else { return }
-        isChecking.insert(provider); statusByProvider[provider] = "正在检查…"
+        isChecking.insert(provider); statusByProvider[provider] = "Checking…"
         defer { isChecking.remove(provider) }
         do {
             let executable = URL(fileURLWithPath: NSString(string: configuration[provider].executablePath).expandingTildeInPath)
@@ -280,12 +280,12 @@ final class AppModel: ObservableObject {
                 let result = try await CommandCapture.run(executable: executable, arguments: ["--safe-mode", "--restricted", "auth", "status"], directory: store.root)
                 let object = (try? JSONSerialization.jsonObject(with: Data(result.stdout.utf8))) as? [String: Any]
                 guard result.code == 0, object?["authMethod"] as? String == "claude.ai" else { throw AgentError.authentication("请先使用 Claude 订阅登录。") }
-                statusByProvider[provider] = "已连接 · \((object?["subscriptionType"] as? String ?? "订阅").capitalized)"
+                statusByProvider[provider] = "Connected · \((object?["subscriptionType"] as? String ?? "Subscription").capitalized)"
                 availableModels[.claude] = ModelCatalog.claudeIDs
             case .codex:
                 let info = try await CodexBackend.inspect(executableURL: executable, directory: store.root)
                 guard info.isChatGPT else { throw AgentError.authentication("请先在 Codex 中使用 ChatGPT 登录。") }
-                statusByProvider[provider] = "已连接 · ChatGPT"
+                statusByProvider[provider] = "Connected · ChatGPT"
                 availableModels[provider] = info.modelIDs
                 codexEfforts = info.supportedReasoningEfforts
                 codexDefaultEfforts = info.defaultReasoningEfforts
@@ -295,12 +295,12 @@ final class AppModel: ObservableObject {
                 let result = try await CommandCapture.run(executable: executable, arguments: ["status"], directory: store.root)
                 let output = result.stdout + result.stderr
                 guard result.code == 0, output.localizedCaseInsensitiveContains("logged in"), !output.localizedCaseInsensitiveContains("not logged in") else { throw AgentError.authentication("请先运行 Cursor 官方登录命令。") }
-                statusByProvider[.grok] = "已连接 · Cursor"
-                statusByProvider[.gemini] = "已连接 · Cursor"
+                statusByProvider[.grok] = "Connected · Cursor"
+                statusByProvider[.gemini] = "Connected · Cursor"
             }
             saveConfiguration()
         } catch {
-            statusByProvider[provider] = "未连接"
+            statusByProvider[provider] = "Not connected"
             errorMessage = SafeText.redact(error.localizedDescription)
         }
     }

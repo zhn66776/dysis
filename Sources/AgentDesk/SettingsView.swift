@@ -12,17 +12,17 @@ struct SettingsView: View {
         VStack(spacing: 0) {
             HStack(alignment: .center) {
                 VStack(alignment: .leading, spacing: 3) {
-                    Text("设置")
+                    Text("Settings")
                         .titleText(20)
-                    Text("选择模型、推理强度和账号连接。")
+                    Text("Choose models, reasoning levels and account connections.")
                         .font(Theme.sans(12))
                         .foregroundStyle(Theme.muted)
                 }
                 Spacer()
                 if model.developerModeEnabled {
-                    ThemedChip(text: "开发者模式", tint: Theme.badBackground, ink: Theme.warn)
+                    ThemedChip(text: "Developer mode", tint: Theme.badBackground, ink: Theme.warn)
                 }
-                Button("完成") { model.saveConfiguration(); dismiss() }
+                Button("Done") { model.saveConfiguration(); dismiss() }
                     .buttonStyle(PrimaryButtonStyle())
                     .keyboardShortcut(.defaultAction)
             }
@@ -35,7 +35,7 @@ struct SettingsView: View {
                     }
                     if model.developerModeEnabled { SecurityNote() }
                     HStack {
-                        Text(model.developerModeEnabled ? "⌘⇧D 退出开发者模式" : "⌘⇧D 开发者模式")
+                        Text(model.developerModeEnabled ? "⌘⇧D Leave developer mode" : "⌘⇧D Developer mode")
                             .metaText()
                         Spacer()
                     }
@@ -71,7 +71,7 @@ private struct ProviderSettingsSection: View {
                     }
                 }
                 Spacer()
-                StatusPill(text: model.statusByProvider[provider] ?? "未检查")
+                StatusPill(text: model.statusByProvider[provider] ?? "Not checked")
             }
             .foregroundStyle(Theme.providerInk(provider))
             .padding(.horizontal, 14).padding(.vertical, 10)
@@ -79,51 +79,27 @@ private struct ProviderSettingsSection: View {
 
             VStack(alignment: .leading, spacing: 12) {
                 if model.developerModeEnabled {
-                    ThemedRow(label: "可执行文件") {
+                    ThemedRow(label: "Executable") {
                         TextField(defaultPath, text: config.executablePath)
                             .themedField(mono: true)
                     }
                 }
-                ThemedRow(label: "默认模型（新会话）") {
-                    HStack(spacing: 8) {
-                        TextField(defaultModel, text: config.modelID)
-                            .themedField(mono: true)
-                        if let models = model.availableModels[provider], !models.isEmpty {
-                            ThemedMenu(title: provider == .claude ? "选择版本" : "选择模型") {
-                                if provider == .claude {
-                                    Section("指定版本") {
-                                        ForEach(ModelCatalog.claudeVersions, id: \.id) { option in
-                                            Button(option.name) { config.modelID.wrappedValue = option.id }
-                                        }
-                                    }
-                                    Section("跟随官方更新的别名") {
-                                        ForEach(ModelCatalog.claudeAliases, id: \.id) { option in
-                                            Button(option.name) { config.modelID.wrappedValue = option.id }
-                                        }
-                                    }
-                                } else {
-                                    ForEach(models, id: \.self) { value in
-                                        Button(value) { config.modelID.wrappedValue = value }
-                                    }
-                                }
-                            }
-                            .help(provider == .claude ? "官方支持的版本；账号可用性由 Claude 决定" : "从已发现的模型中选择")
-                        }
-                    }
+                ThemedRow(label: "Default model") {
+                    DefaultModelPicker(model: model, provider: provider, modelID: config.modelID)
                 }
-                ThemedRow(label: "默认推理强度") {
-                    EffortControl(model: model, provider: provider, modelID: config.modelID, effort: config.reasoningEffort)
+                ThemedRow(label: "Default reasoning") {
+                    EffortControl(model: model, provider: provider, modelID: config.modelID, effort: config.reasoningEffort, english: true)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 .onChange(of: config.wrappedValue.modelID) { _, _ in config.reasoningEffort.wrappedValue = nil }
                 HStack(spacing: 8) {
-                    Button("检查连接") {
+                    Button("Check connection") {
                         Task { await model.checkProvider(provider) }
                     }
                     .buttonStyle(SecondaryButtonStyle())
                     .disabled(model.isChecking.contains(provider))
                     if provider != .claude {
-                        Button("发现模型") {
+                        Button(model.isChecking.contains(provider) ? "Loading…" : "Discover models") {
                             Task { await model.loadModels(provider) }
                         }
                         .buttonStyle(SecondaryButtonStyle())
@@ -133,7 +109,7 @@ private struct ProviderSettingsSection: View {
                 }
                 if model.developerModeEnabled {
                     HStack(spacing: 8) {
-                        Text("登录命令")
+                        Text("Login command")
                             .font(Theme.sans(11, weight: .medium))
                             .foregroundStyle(Theme.muted)
                         Text(loginCommand)
@@ -155,16 +131,13 @@ private struct ProviderSettingsSection: View {
     }
 
     private var defaultPath: String {
-        "请填写官方可执行文件路径"
+        "Path to the official executable"
     }
 
-    private var defaultModel: String {
-        "请选择发现的模型"
-    }
 
     private var loginCommand: String {
         let configuredPath = config.wrappedValue.executablePath.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !configuredPath.isEmpty else { return "请先填写可执行文件路径" }
+        guard !configuredPath.isEmpty else { return "Set the executable path first" }
         let executable = shellQuote(configuredPath)
         switch provider {
         case .claude: return "\(executable) auth login"
@@ -180,21 +153,89 @@ private struct ProviderSettingsSection: View {
     private var helperText: String {
         if !model.developerModeEnabled {
             switch provider {
-            case .claude: return "默认设置用于新建会话；已有会话保留各自的模型和推理强度。"
-            case .codex: return "使用你的 ChatGPT 账号；可选模型与推理档位来自账号的当前列表。"
-            case .grok: return "使用你的 Cursor 账号和对应模型额度。"
-            case .gemini: return "使用 Cursor 账号中的 Gemini 模型及额度。"
+            case .claude: return "Defaults apply to new conversations; existing ones keep their own model and reasoning level."
+            case .codex: return "Uses your ChatGPT account; models and reasoning levels come from the account's current list."
+            case .grok: return "Uses your Cursor account and its model quota."
+            case .gemini: return "Uses the Gemini models and quota in your Cursor account."
             }
         }
         switch provider {
         case .claude:
-            return "指定版本使用完整模型 ID；opus / sonnet / haiku 会随官方更新。列表来自官方文档，不代表已验证本账号的全部权限。更改只影响新建会话，已有会话保持原模型。"
+            return "Pinned versions use the full model ID; opus / sonnet / haiku follow official updates. The list comes from the official docs and does not confirm every model is available to this account. Changes affect new conversations only."
         case .codex:
-            return "使用 Codex app-server 的 ChatGPT 登录。不要在这里填写 API Key。"
+            return "Uses the ChatGPT login of the Codex app-server. Do not enter an API key here."
         case .grok:
-            return "通过 Cursor CLI 使用你的 Legacy Cursor Pro 额度；Grok 用量来自 Cursor Models 池。"
+            return "Uses your Legacy Cursor Pro quota through the Cursor CLI; Grok usage comes from the Cursor Models pool."
         case .gemini:
-            return "通过 Cursor CLI 使用可用的 Gemini 模型；这消耗 Cursor 额度，不是 Google AI Pro 额度。"
+            return "Uses the available Gemini models through the Cursor CLI; this spends Cursor quota, not Google AI Pro quota."
+        }
+    }
+}
+
+/// Default model for new conversations, chosen from a list only: Claude's
+/// official versions and aliases, Codex models from model/list, and Cursor
+/// model families (the reasoning picker then chooses the family's variant).
+private struct DefaultModelPicker: View {
+    @ObservedObject var model: AppModel
+    let provider: ProviderID
+    @Binding var modelID: String
+
+    private struct Option: Hashable { let id: String; let label: String }
+
+    private static let claudeVersions = ModelCatalog.claudeVersions.map { Option(id: $0.id, label: $0.name) }
+    private static let claudeAliases = ModelCatalog.claudeAliases.map { Option(id: $0.id, label: "\($0.id.capitalized) · follows latest") }
+
+    private var discovered: [Option] {
+        let ids = model.availableModels[provider] ?? []
+        switch provider {
+        case .claude: return []
+        case .codex: return ids.map { Option(id: $0, label: $0) }
+        case .grok, .gemini: return ReasoningEffortCatalog.cursorFamilies(availableModelIDs: ids).map { Option(id: $0.id, label: $0.label) }
+        }
+    }
+
+    private var isCursor: Bool { provider == .grok || provider == .gemini }
+
+    private func isSelected(_ option: Option) -> Bool {
+        isCursor ? ReasoningEffortCatalog.cursorFamily(of: modelID) == option.label : modelID == option.id
+    }
+
+    private var title: String {
+        if modelID.isEmpty { return provider == .codex ? "Official default" : "Choose a model" }
+        let all = provider == .claude ? Self.claudeVersions + Self.claudeAliases : discovered
+        // A saved ID that is not in the current list still shows as it is.
+        return all.first(where: isSelected)?.label ?? (isCursor ? ReasoningEffortCatalog.cursorFamily(of: modelID) : modelID)
+    }
+
+    var body: some View {
+        ThemedMenu(title: title, mono: provider != .claude) {
+            switch provider {
+            case .claude:
+                Section("Pinned versions") { options(Self.claudeVersions) }
+                Section("Aliases") { options(Self.claudeAliases) }
+            case .codex:
+                choice(Option(id: "", label: "Official default"))
+                if !discovered.isEmpty { Divider() }
+                options(discovered)
+            case .grok, .gemini:
+                options(discovered)
+            }
+            if provider != .claude {
+                if !discovered.isEmpty { Divider() }
+                Button(discovered.isEmpty ? "Discover models" : "Refresh model list") { Task { await model.loadModels(provider) } }
+                    .disabled(model.isChecking.contains(provider))
+            }
+        }
+        .help(provider == .claude ? "Officially supported versions; availability depends on your Claude account." : "Choose from the models discovered for this account.")
+    }
+
+    private func options(_ list: [Option]) -> some View {
+        ForEach(list, id: \.self) { choice($0) }
+    }
+
+    private func choice(_ option: Option) -> some View {
+        Button { modelID = option.id } label: {
+            if isSelected(option) { Label(option.label, systemImage: "checkmark") } else { Text(option.label) }
         }
     }
 }
@@ -244,20 +285,20 @@ private struct CopyCommandButton: View {
                 copied = false
             }
         } label: {
-            Text(copied ? "已复制" : "复制")
+            Text(copied ? "Copied" : "Copy")
         }
         .buttonStyle(GhostButtonStyle())
-        .help("复制登录命令")
-        .disabled(command.hasPrefix("请先"))
+        .help("Copy the login command")
+        .disabled(command.hasPrefix("Set the"))
     }
 }
 
 private struct SecurityNote: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
-            Text("认证安全")
+            Text("Authentication")
                 .font(Theme.sans(12, weight: .medium))
-            Text("AgentDesk 只启动官方 CLI 或官方 app-server，并让它们自己完成登录。不要把 API Key、OAuth Token 或 Keychain 内容填入设置。")
+            Text("AgentDesk only starts the official CLIs or app-server and lets them handle sign-in. Never enter API keys, OAuth tokens or Keychain contents in Settings.")
                 .font(Theme.sans(11))
                 .foregroundStyle(Theme.muted)
                 .fixedSize(horizontal: false, vertical: true)

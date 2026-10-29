@@ -9,6 +9,8 @@ struct EffortControl: View {
     @Binding var modelID: String
     @Binding var effort: String?
     var compact = false
+    /// Settings is in English; the classic window keeps Chinese.
+    var english = false
 
     private var usesVariants: Bool { provider == .grok || provider == .gemini }
     private var variants: [String: String] {
@@ -24,16 +26,17 @@ struct EffortControl: View {
     }
     private var selectedEffort: String? { usesVariants ? ReasoningEffortCatalog.cursorVariantEffort(modelID: modelID) : effort }
     private var display: String {
-        guard let value = selectedEffort else { return "官方默认" }
-        return "\(ReasoningEffortCatalog.label(value)) · \(value)"
+        guard let value = selectedEffort else { return english ? "Official default" : "官方默认" }
+        return choiceLabel(value)
     }
+    private func choiceLabel(_ value: String) -> String { english ? value : "\(ReasoningEffortCatalog.label(value)) · \(value)" }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
             HStack(spacing: 8) {
-                ThemedMenu(title: "推理：\(display)") {
+                ThemedMenu(title: (english ? "Reasoning: " : "推理：") + display) {
                     if !usesVariants {
-                        Button("官方默认") { effort = nil }
+                        Button(english ? "Official default" : "官方默认") { effort = nil }
                         Divider()
                     }
                     ForEach(choices, id: \.self) { value in
@@ -41,17 +44,17 @@ struct EffortControl: View {
                             if usesVariants, let id = variants[value] { modelID = id; effort = nil }
                             else { effort = value }
                         } label: {
-                            if value == selectedEffort { Label("\(ReasoningEffortCatalog.label(value)) · \(value)", systemImage: "checkmark") }
-                            else { Text("\(ReasoningEffortCatalog.label(value)) · \(value)") }
+                            if value == selectedEffort { Label(choiceLabel(value), systemImage: "checkmark") }
+                            else { Text(choiceLabel(value)) }
                         }
                     }
                     if provider != .claude {
                         Divider()
-                        Button("刷新可用档位") { discover() }
+                        Button(english ? "Refresh available levels" : "刷新可用档位") { discover() }
                     }
                 }
                 if choices.isEmpty && provider != .claude {
-                    Button(model.isChecking.contains(provider) ? "读取中…" : "读取档位") { discover() }
+                    Button(model.isChecking.contains(provider) ? (english ? "Loading…" : "读取中…") : (english ? "Load levels" : "读取档位")) { discover() }
                         .buttonStyle(GhostButtonStyle()).disabled(model.isChecking.contains(provider))
                 }
             }
@@ -63,6 +66,7 @@ struct EffortControl: View {
     }
 
     private var guidance: String {
+        if english { return englishGuidance }
         if !model.developerModeEnabled {
             switch provider {
             case .claude: return "选择思考投入程度；较高档位通常需要更长时间。具体可用性取决于所选模型。"
@@ -74,6 +78,21 @@ struct EffortControl: View {
         case .claude: return "通过 Claude Code 的 --effort 传入。具体模型支持情况由官方 CLI 校验；更高档位通常需要更长时间。"
         case .codex: return "档位来自当前模型的官方列表。官方默认会在下一次回复时重新读取模型默认值。"
         case .grok, .gemini: return "从 Cursor 当前列表选择同一模型的推理档位，保留 Fast 等模式；不会切换到其他模型系列。"
+        }
+    }
+
+    private var englishGuidance: String {
+        if !model.developerModeEnabled {
+            switch provider {
+            case .claude: return "How much the model thinks; higher levels usually take longer. Availability depends on the selected model."
+            case .codex: return "Levels depend on the model. Official default uses the model's current default level."
+            case .grok, .gemini: return "Changes the reasoning level of the current model and keeps its family and speed mode."
+            }
+        }
+        switch provider {
+        case .claude: return "Passed to Claude Code as --effort. The official CLI checks model support; higher levels usually take longer."
+        case .codex: return "Levels come from the model's official list. Official default re-reads the model's default on the next reply."
+        case .grok, .gemini: return "Picks a reasoning level of the same model from Cursor's current list and keeps modes such as Fast; never switches to another model family."
         }
     }
 
