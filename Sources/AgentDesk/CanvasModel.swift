@@ -14,8 +14,7 @@ final class CanvasModel: ObservableObject {
     /// A downstream re-run in progress: nodes in order and the current index.
     @Published private(set) var chain: (boardID: UUID, order: [UUID], index: Int)?
     private var chainTask: Task<Void, Never>?
-    /// Same ceiling as a Plaza meeting.
-    static let maxChainCalls = 12
+    static let maxChainCalls = CanvasChainRunner.maxCalls
 
     let app: AppModel
     private let store: CanvasStore
@@ -187,31 +186,49 @@ final class CanvasModel: ObservableObject {
     /// and the run stops at the first node that does not complete.
     func runChain(boardID: UUID, order: [UUID]) {
         guard chain == nil else { app.errorMessage = "已有一组节点在重跑。"; return }
-        guard !order.isEmpty else { return }
-        guard order.count <= Self.maxChainCalls else { app.errorMessage = "一次最多重跑 \(Self.maxChainCalls) 个节点，请从更下游的节点分段运行。"; return }
+        switch CanvasChainRunner.refusal(count: order.count) {
+        case .empty?: return
+        case .overCap?: app.errorMessage = "一次最多重跑 \(Self.maxChainCalls) 个节点，请从更下游的节点分段运行。"; return
+        default: break
+        }
         chain = (boardID, order, 0)
-        chainTask = Task { [weak self] in
-            guard let self else { return }
-            defer { self.chain = nil; self.chainTask = nil }
-            for (index, nodeID) in order.enumerated() {
-                guard !Task.isCancelled else { return }
-                self.chain?.index = index
-                guard let board = self.library.boards.first(where: { $0.id == boardID }), let node = board.node(nodeID),
-                      let session = self.sessionsByID[node.sessionID] else { continue }
-                guard let prompt = CanvasContextBuilder.rerunPrompt(for: session) else { continue }
-                guard self.send(boardID: boardID, nodeID: nodeID, text: prompt) else {
-                    if self.app.errorMessage == nil { self.app.errorMessage = "「\(session.title)」没有开始，后面的节点已停止。" }
-                    return
-                }
-                while self.app.runningSessionIDs.contains(session.id) {
-                    if Task.isCancelled { self.app.stop(sessionID: session.id); return }
+        // Session behind each node the runner reached, for waiting, stopping and messages.
+        var sessionOf: [UUID: UUID] = [:]
+        let runner = CanvasChainRunner(
+            step: { [weak self] index in self?.chain?.index = index },
+            start: { [weak self] nodeID in
+                guard let self, let board = self.library.boards.first(where: { $0.id == boardID }), let node = board.node(nodeID),
+                      let session = self.sessionsByID[node.sessionID],
+                      let prompt = CanvasContextBuilder.rerunPrompt(for: session) else { return .skipped }
+                sessionOf[nodeID] = session.id
+                return self.send(boardID: boardID, nodeID: nodeID, text: prompt) ? .started : .failed
+            },
+            wait: { [weak self] nodeID in
+                guard let sessionID = sessionOf[nodeID] else { return .incomplete }
+                while let self, self.app.runningSessionIDs.contains(sessionID) {
+                    if Task.isCancelled { return .cancelled }
                     try? await Task.sleep(nanoseconds: 200_000_000)
                 }
-                let last = self.sessionsByID[session.id]?.messages.last { $0.role == .assistant }
-                guard last?.state == .complete else {
-                    if self.app.errorMessage == nil { self.app.errorMessage = "「\(session.title)」没有完成，后面的节点已停止。" }
-                    return
-                }
+                let last = self?.sessionsByID[sessionID]?.messages.last { $0.role == .assistant }
+                return last?.state == .complete ? .complete : .incomplete
+            },
+            stop: { [weak self] nodeID in
+                if let sessionID = sessionOf[nodeID] { self?.app.stop(sessionID: sessionID) }
+            })
+        chainTask = Task { [weak self] in
+            let outcome = await runner.run(order)
+            guard let self else { return }
+            self.chain = nil
+            self.chainTask = nil
+            let title: (Int) -> String = { index in
+                sessionOf[order[index]].flatMap { self.sessionsByID[$0]?.title } ?? ""
+            }
+            switch outcome {
+            case .notStarted(let index):
+                if self.app.errorMessage == nil { self.app.errorMessage = "「\(title(index))」没有开始，后面的节点已停止。" }
+            case .incomplete(let index):
+                if self.app.errorMessage == nil { self.app.errorMessage = "「\(title(index))」没有完成，后面的节点已停止。" }
+            case .finished, .empty, .overCap, .cancelled: break
             }
         }
     }
