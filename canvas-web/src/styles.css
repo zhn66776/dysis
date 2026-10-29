@@ -2,7 +2,7 @@
 :root {
   color-scheme: light dark;
   --bg: #F5F4EE; --side: #EFEDE4; --card: #FFFFFF; --panel: #FBFAF6;
-  --bd: #E3E0D4; --bd2: #DDD9CB; --tx: #2B2A26; --mu: #7A776C; --mu2: #A9A598;
+  --bd: #E3E0D4; --bd2: #DDD9CB; --tx: #2B2A26; --mu: #6B685D; --mu2: #A9A598;
   --sel: #E4E1D5; --chip: #EFEDE4; --bubble: #ECE9DF; --dot: #D6D2C3; --edge-data: #9A968A;
   --primary: #C96442; --on-primary: #FFFFFF; --ring: #2B2A26;
   --ok: #3B6D11; --run: #0F6E56; --bad: #A32D2D; --bad-bg: #FCEBEB;
@@ -218,7 +218,7 @@ input, textarea { font: inherit; color: var(--tx); }
 .node-badge { font-size: 10px; font-weight: 400; padding: 1px 6px; border-radius: 5px; background: var(--card); color: var(--p-ink); white-space: nowrap; }
 .node.stale { border-color: #EF9F27; }
 .node.chain-current { box-shadow: 0 0 0 2px var(--run); }
-.status-stale { color: #BA7517; }
+.status-stale { color: #93590E; }
 @media (prefers-color-scheme: dark) { .status-stale { color: #EF9F27; } }
 .downstream-pill { position: absolute; right: 10px; bottom: -11px; border: 0.5px solid var(--bd2); background: var(--card); color: var(--tx); border-radius: 999px; padding: 1px 9px; font-size: 11px; }
 .downstream-pill:hover { border-color: var(--run); color: var(--run); }
@@ -226,5 +226,10 @@ input, textarea { font: inherit; color: var(--tx); }
 .stale-banner.neutral { background: var(--chip); color: var(--tx); }
 @media (prefers-color-scheme: dark) { .stale-banner { background: #3A2A12; color: #FAC775; } .stale-banner.neutral { background: var(--chip); color: var(--tx); } }
 .stale-banner .btn { flex: none; }
-.node.picked { box-shadow: 0 0 0 2px var(--ring), 0 0 0 5px var(--sel); }
+.node.picked { box-shadow: 0 0 0 2px var(--ring), 0 0 0 5px var(--mu2); }
 @media (prefers-color-scheme: dark) { .node.picked { box-shadow: 0 0 0 1.5px var(--p), 0 0 0 4px var(--p-tint); } }
+/* Light only: text on --mu2 and the amber warning fell below 3:1 on warm paper. */
+@media (prefers-color-scheme: light) {
+  .count, .canvas-hint, .composer-hint { color: var(--mu); }
+  .warn-text { color: #93590E; }
+}
