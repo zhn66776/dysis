@@ -119,6 +119,7 @@ import json, pathlib, sys
 mode_path = pathlib.Path(sys.argv[0]).parent / "mode"
 assert "features.multi_agent=false" in sys.argv
 assert "features.multi_agent_v2=false" in sys.argv
+assert "features.memories=false" in sys.argv
 mode = mode_path.read_text().strip() if mode_path.exists() else "success"
 
 def send(obj):
