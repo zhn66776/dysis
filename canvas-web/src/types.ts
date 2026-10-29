@@ -104,7 +104,10 @@ export interface StatePayload {
 
 export interface ComposerInsert { type: 'composer.insert'; sessionID: string; text: string }
 
-export type Incoming = StatePayload | ComposerInsert
+/** Swift asks for an explicit yes before a destructive or call-spending action. */
+export interface ConfirmShow { type: 'confirm.show'; id: string; title: string; detail: string; action: string }
+
+export type Incoming = StatePayload | ComposerInsert | ConfirmShow
 
 export type Command =
   | { type: 'ready' }
@@ -135,6 +138,7 @@ export type Command =
   | { type: 'node.rerun'; boardID: string; nodeID: string }
   | { type: 'chain.downstream'; boardID: string; nodeID: string }
   | { type: 'chain.stop' }
+  | { type: 'confirm.answer'; id: string; ok: boolean }
 
 export interface AppState {
   ready: boolean

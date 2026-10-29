@@ -1,13 +1,13 @@
 // Browser-only stand-in for the Swift host, used by `npm run dev`.
 // Replies are canned local text, clearly labelled; nothing leaves the page.
-import type { BoardPayload, Command, ComposerInsert, MessagePayload, NodePayload, Provider, SessionSummary, StatePayload } from './types'
+import type { BoardPayload, Command, ComposerInsert, ConfirmShow, MessagePayload, NodePayload, Provider, SessionSummary, StatePayload } from './types'
 
 interface MockSession { id: string; title: string; provider: Provider; modelID: string; started: boolean; messages: MessagePayload[] }
 
 const models: Record<Provider, string> = { claude: 'sonnet', codex: 'gpt-6.1-sol', grok: 'grok-4.7-medium', gemini: 'gemini-4-argon-medium' }
 const uid = () => crypto.randomUUID()
 
-export function createMockHost(emit: (p: StatePayload | ComposerInsert) => void) {
+export function createMockHost(emit: (p: StatePayload | ComposerInsert | ConfirmShow) => void) {
   const sessions = new Map<string, MockSession>()
   const boards: BoardPayload[] = []
   let current = ''
@@ -15,6 +15,12 @@ export function createMockHost(emit: (p: StatePayload | ComposerInsert) => void)
   const running = new Map<string, number>()
   const efforts = new Map<string, string>()
   const drafts = new Map<string, { id: string; name: string; kind: 'pdf'; bytes: number }[]>()
+  const confirms = new Map<string, () => void>()
+  const confirm = (title: string, detail: string, action: string, perform: () => void) => {
+    const id = uid()
+    confirms.set(id, perform)
+    emit({ type: 'confirm.show', id, title, detail, action })
+  }
 
   const addSession = (provider: Provider, title: string, messages: MessagePayload[] = []) => {
     const s: MockSession = { id: uid(), title, provider, modelID: models[provider], started: messages.length > 0, messages }
@@ -61,7 +67,15 @@ export function createMockHost(emit: (p: StatePayload | ComposerInsert) => void)
       case 'board.create': { const nb: BoardPayload = { id: uid(), title: '新画布', nodes: [], edges: [] }; boards.push(nb); current = nb.id; break }
       case 'board.select': current = c.boardID; break
       case 'board.rename': { const x = boards.find(y => y.id === c.boardID); if (x) x.title = c.title; break }
-      case 'board.delete': { if (boards.length > 1) { boards.splice(boards.findIndex(y => y.id === c.boardID), 1); current = boards[0].id } break }
+      case 'board.delete': {
+        const target = boards.find(y => y.id === c.boardID)
+        if (!target || boards.length <= 1) return
+        confirm(`删除画布「${target.title}」？`, `画布上的 ${target.nodes.length} 个对话的本地记录也会删除。官方 CLI 中的历史和工作目录文件不受影响。`, '删除画布', () => {
+          boards.splice(boards.findIndex(y => y.id === c.boardID), 1); current = boards[0].id
+        })
+        return
+      }
+      case 'confirm.answer': { const perform = confirms.get(c.id); confirms.delete(c.id); if (c.ok && perform) perform(); break }
       case 'node.create': {
         const s = addSession(c.provider, '新对话')
         const n: NodePayload = { id: uid(), sessionID: s.id, x: c.x, y: c.y, stale: false, downstream: 0 }
@@ -71,7 +85,14 @@ export function createMockHost(emit: (p: StatePayload | ComposerInsert) => void)
         push({ focusNodeID: n.id }); return
       }
       case 'node.move': for (const p of c.positions) { const n = nodeOf(c.boardID, p.nodeID); if (n) { n.x = p.x; n.y = p.y } } break
-      case 'node.delete': { const x = boardNow(); x.nodes = x.nodes.filter(n => !c.nodeIDs.includes(n.id)); x.edges = x.edges.filter(e => !c.nodeIDs.includes(e.source) && !c.nodeIDs.includes(e.target)); break }
+      case 'node.delete': {
+        const x = boardNow()
+        const titles = x.nodes.filter(n => c.nodeIDs.includes(n.id)).map(n => sessions.get(n.sessionID)?.title ?? '')
+        confirm(`删除${titles.length === 1 ? `「${titles[0]}」` : `${c.nodeIDs.length} 个节点`}？`, '只删除本地记录和画布上的节点，官方 CLI 中的历史和工作目录文件不受影响。', '删除', () => {
+          x.nodes = x.nodes.filter(n => !c.nodeIDs.includes(n.id)); x.edges = x.edges.filter(e => !c.nodeIDs.includes(e.source) && !c.nodeIDs.includes(e.target))
+        })
+        return
+      }
       case 'node.rename': { const s = sessions.get(c.sessionID); if (s) s.title = c.title; break }
       case 'node.branch': {
         const parent = nodeOf(c.boardID, c.nodeID)!
