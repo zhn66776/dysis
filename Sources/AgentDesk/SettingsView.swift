@@ -10,39 +10,40 @@ struct SettingsView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack {
+            HStack(alignment: .center) {
                 VStack(alignment: .leading, spacing: 3) {
                     Text("设置")
-                        .font(.title2.weight(.semibold))
+                        .titleText(20)
                     Text("选择模型、推理强度和账号连接。")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
+                        .font(Theme.sans(12))
+                        .foregroundStyle(Theme.muted)
                 }
                 Spacer()
                 if model.developerModeEnabled {
-                    Label("开发者模式", systemImage: "hammer")
-                        .font(.caption).foregroundStyle(.orange)
+                    ThemedChip(text: "开发者模式", tint: Theme.badBackground, ink: Theme.warn)
                 }
                 Button("完成") { model.saveConfiguration(); dismiss() }
+                    .buttonStyle(PrimaryButtonStyle())
                     .keyboardShortcut(.defaultAction)
             }
-            .padding(24)
-            Divider()
+            .padding(.horizontal, 24).padding(.vertical, 18)
+            Hairline()
             ScrollView {
-                VStack(alignment: .leading, spacing: 24) {
+                VStack(alignment: .leading, spacing: 14) {
                     ForEach(ProviderID.allCases) { provider in
                         ProviderSettingsSection(model: model, provider: provider)
                     }
                     if model.developerModeEnabled { SecurityNote() }
                     HStack {
                         Text(model.developerModeEnabled ? "⌘⇧D 退出开发者模式" : "⌘⇧D 开发者模式")
-                            .font(.caption).foregroundStyle(.tertiary)
+                            .metaText()
                         Spacer()
                     }
                 }
                 .padding(24)
             }
         }
+        .themedSurface()
     }
 }
 
@@ -58,37 +59,37 @@ private struct ProviderSettingsSection: View {
     }
 
     var body: some View {
-        GroupBox {
-            VStack(alignment: .leading, spacing: 14) {
-                HStack(spacing: 10) {
-                    ProviderBadgeForSettings(provider: provider)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(provider.name)
-                            .font(.headline)
-                        if model.developerModeEnabled {
-                            Text(provider.runtimeName)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 9) {
+                ProviderBadgeForSettings(provider: provider)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(provider.name)
+                        .font(Theme.sans(13, weight: .medium))
+                    if model.developerModeEnabled {
+                        Text(provider.runtimeName)
+                            .metaText()
                     }
-                    Spacer()
-                    StatusPill(text: model.statusByProvider[provider] ?? "未检查")
                 }
+                Spacer()
+                StatusPill(text: model.statusByProvider[provider] ?? "未检查")
+            }
+            .foregroundStyle(Theme.providerInk(provider))
+            .padding(.horizontal, 14).padding(.vertical, 10)
+            .background(Theme.providerTint(provider))
 
+            VStack(alignment: .leading, spacing: 12) {
                 if model.developerModeEnabled {
-                    LabeledContent("可执行文件") {
+                    ThemedRow(label: "可执行文件") {
                         TextField(defaultPath, text: config.executablePath)
-                            .textFieldStyle(.roundedBorder)
-                            .font(.system(.body, design: .monospaced))
+                            .themedField(mono: true)
                     }
                 }
-                LabeledContent("默认模型（新会话）") {
+                ThemedRow(label: "默认模型（新会话）") {
                     HStack(spacing: 8) {
                         TextField(defaultModel, text: config.modelID)
-                            .textFieldStyle(.roundedBorder)
-                            .font(.system(.body, design: .monospaced))
+                            .themedField(mono: true)
                         if let models = model.availableModels[provider], !models.isEmpty {
-                            Menu {
+                            ThemedMenu(title: provider == .claude ? "选择版本" : "选择模型") {
                                 if provider == .claude {
                                     Section("指定版本") {
                                         ForEach(ModelCatalog.claudeVersions, id: \.id) { option in
@@ -105,32 +106,27 @@ private struct ProviderSettingsSection: View {
                                         Button(value) { config.modelID.wrappedValue = value }
                                     }
                                 }
-                            } label: {
-                                Label(provider == .claude ? "选择版本" : "选择模型", systemImage: "list.bullet.rectangle")
                             }
-                            .fixedSize()
                             .help(provider == .claude ? "官方支持的版本；账号可用性由 Claude 决定" : "从已发现的模型中选择")
                         }
                     }
                 }
-                LabeledContent("默认推理强度") {
+                ThemedRow(label: "默认推理强度") {
                     EffortControl(model: model, provider: provider, modelID: config.modelID, effort: config.reasoningEffort)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 .onChange(of: config.wrappedValue.modelID) { _, _ in config.reasoningEffort.wrappedValue = nil }
-                HStack(spacing: 10) {
-                    Button {
+                HStack(spacing: 8) {
+                    Button("检查连接") {
                         Task { await model.checkProvider(provider) }
-                    } label: {
-                        Label("检查连接", systemImage: "checkmark.shield")
                     }
+                    .buttonStyle(SecondaryButtonStyle())
                     .disabled(model.isChecking.contains(provider))
                     if provider != .claude {
-                        Button {
+                        Button("发现模型") {
                             Task { await model.loadModels(provider) }
-                        } label: {
-                            Label("发现模型", systemImage: "wand.and.stars")
                         }
+                        .buttonStyle(SecondaryButtonStyle())
                         .disabled(model.isChecking.contains(provider))
                     }
                     Spacer()
@@ -138,25 +134,24 @@ private struct ProviderSettingsSection: View {
                 if model.developerModeEnabled {
                     HStack(spacing: 8) {
                         Text("登录命令")
-                            .font(.caption.weight(.medium))
-                            .foregroundStyle(.secondary)
+                            .font(Theme.sans(11, weight: .medium))
+                            .foregroundStyle(Theme.muted)
                         Text(loginCommand)
-                            .font(.system(.caption, design: .monospaced))
+                            .font(Theme.mono(11))
                             .textSelection(.enabled)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(Theme.muted)
                             .lineLimit(1)
                         CopyCommandButton(command: loginCommand)
                     }
                 }
                 Text(helperText)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(Theme.sans(11))
+                    .foregroundStyle(Theme.muted)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            .padding(5)
-        } label: {
-            EmptyView()
+            .padding(14)
         }
+        .modifier(ProviderCard())
     }
 
     private var defaultPath: String {
@@ -207,7 +202,18 @@ private struct ProviderSettingsSection: View {
 private struct ProviderBadgeForSettings: View {
     let provider: ProviderID
     var body: some View {
-        ProviderIcon(provider: provider, size: 30)
+        ProviderIcon(provider: provider, size: 22)
+    }
+}
+
+/// Settings card with a provider-tinted head, like a canvas node.
+private struct ProviderCard: ViewModifier {
+    @Environment(\.colorScheme) private var scheme
+    func body(content: Content) -> some View {
+        content
+            .background(Theme.card)
+            .clipShape(RoundedRectangle(cornerRadius: Theme.radius(scheme)))
+            .overlay(RoundedRectangle(cornerRadius: Theme.radius(scheme)).strokeBorder(Theme.border2, lineWidth: 0.5))
     }
 }
 
@@ -215,11 +221,10 @@ private struct StatusPill: View {
     let text: String
     var body: some View {
         Text(text)
-            .font(.caption.weight(.medium))
-            .foregroundStyle(.secondary)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
-            .background(.quaternary, in: Capsule())
+            .metaText()
+            .padding(.horizontal, 7)
+            .padding(.vertical, 2)
+            .background(Theme.card.opacity(0.7), in: RoundedRectangle(cornerRadius: 6))
     }
 }
 
@@ -239,11 +244,9 @@ private struct CopyCommandButton: View {
                 copied = false
             }
         } label: {
-            Label(copied ? "已复制" : "复制", systemImage: copied ? "checkmark" : "doc.on.doc")
-                .labelStyle(.titleAndIcon)
+            Text(copied ? "已复制" : "复制")
         }
-        .buttonStyle(.borderless)
-        .font(.caption)
+        .buttonStyle(GhostButtonStyle())
         .help("复制登录命令")
         .disabled(command.hasPrefix("请先"))
     }
@@ -251,19 +254,16 @@ private struct CopyCommandButton: View {
 
 private struct SecurityNote: View {
     var body: some View {
-        HStack(alignment: .top, spacing: 10) {
-            Image(systemName: "lock.shield")
-                .foregroundStyle(.tint)
-            VStack(alignment: .leading, spacing: 5) {
-                Text("认证安全")
-                    .font(.subheadline.weight(.semibold))
-                Text("AgentDesk 只启动官方 CLI 或官方 app-server，并让它们自己完成登录。不要把 API Key、OAuth Token 或 Keychain 内容填入设置。")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
+        VStack(alignment: .leading, spacing: 5) {
+            Text("认证安全")
+                .font(Theme.sans(12, weight: .medium))
+            Text("AgentDesk 只启动官方 CLI 或官方 app-server，并让它们自己完成登录。不要把 API Key、OAuth Token 或 Keychain 内容填入设置。")
+                .font(Theme.sans(11))
+                .foregroundStyle(Theme.muted)
+                .fixedSize(horizontal: false, vertical: true)
         }
-        .padding(13)
-        .background(.tint.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 12).padding(.vertical, 10)
+        .background(Theme.chip, in: RoundedRectangle(cornerRadius: 8))
     }
 }

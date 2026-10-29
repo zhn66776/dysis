@@ -34,7 +34,7 @@ struct ContentView: View {
     }
 
     var body: some View {
-        NavigationSplitView {
+        HStack(spacing: 0) {
             SessionSidebar(
                 model: model,
                 sessions: visibleSessions,
@@ -45,36 +45,31 @@ struct ContentView: View {
                 plaza: plaza,
                 selectedPlazaID: $selectedPlazaID,
                 onNewPlaza: { showingNewPlaza = true },
-                onMCP: { showingMCP = true }
+                onMCP: { showingMCP = true },
+                onSettings: { showingSettings = true }
             )
-            .navigationSplitViewColumnWidth(min: 250, ideal: 290, max: 360)
-        } detail: {
-            if let id = selectedPlazaID {
-                PlazaDetail(model: plaza, appModel: model, attachments: attachments, roomID: id, draft: Binding(get: { draftByPlaza[id, default: ""] }, set: { draftByPlaza[id] = $0 })).id(id)
-            } else if let session = model.selectedSession {
-                ChatDetail(
-                    model: model,
-                    attachments: attachments,
-                    session: session,
-                    draft: Binding(
-                        get: { draftBySession[session.id, default: ""] },
-                        set: { draftBySession[session.id] = $0 }
-                    )
-                ).id(session.id)
-            } else {
-                WelcomeView(onNewSession: { model.newSession(provider: $0) })
-            }
-        }
-        .toolbar {
-            ToolbarItem(placement: .navigation) {
-                Button {
-                    showingSettings = true
-                } label: {
-                    Label("设置", systemImage: "slider.horizontal.3")
+            .frame(width: 270)
+            Hairline(vertical: true)
+            Group {
+                if let id = selectedPlazaID {
+                    PlazaDetail(model: plaza, appModel: model, attachments: attachments, roomID: id, draft: Binding(get: { draftByPlaza[id, default: ""] }, set: { draftByPlaza[id] = $0 })).id(id)
+                } else if let session = model.selectedSession {
+                    ChatDetail(
+                        model: model,
+                        attachments: attachments,
+                        session: session,
+                        draft: Binding(
+                            get: { draftBySession[session.id, default: ""] },
+                            set: { draftBySession[session.id] = $0 }
+                        )
+                    ).id(session.id)
+                } else {
+                    WelcomeView(onNewSession: { model.newSession(provider: $0) })
                 }
-                .help("配置各官方 CLI 与模型")
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+        .themedSurface()
         .sheet(isPresented: $showingSettings) {
             SettingsView(model: model)
                 .frame(width: 720, height: 650)
@@ -100,13 +95,15 @@ struct ContentView: View {
                 renamingSession = nil
             }
         }
-        .safeAreaInset(edge: .top, spacing: 0) {
+        .overlay(alignment: .top) {
             if let error = model.errorMessage ?? plaza.errorMessage ?? attachments.errorMessage {
-                ErrorBanner(message: error) {
+                ThemedErrorBanner(message: error) {
                     model.errorMessage = nil
                     plaza.errorMessage = nil
                     attachments.errorMessage = nil
                 }
+                .frame(maxWidth: 640)
+                .padding(.top, 10)
             }
         }
     }
@@ -128,167 +125,163 @@ private struct SessionSidebar: View {
     @Binding var selectedPlazaID: UUID?
     let onNewPlaza: () -> Void
     let onMCP: () -> Void
+    let onSettings: () -> Void
     @State private var pendingDelete: ChatSession?
     @State private var pendingPlazaDelete: UUID?
 
-    private var selection: Binding<SidebarSelection?> {
-        Binding(get: {
-            if let id = selectedPlazaID { return .plaza(id) }
-            return model.selectedSessionID.map { .chat($0) }
-        }, set: { value in
-            switch value {
-            case .chat(let id): selectedPlazaID = nil; model.selectedSessionID = id
-            case .plaza(let id): selectedPlazaID = id
-            case nil: break
-            }
-        })
+    private var selection: SidebarSelection? {
+        if let id = selectedPlazaID { return .plaza(id) }
+        return model.selectedSessionID.map { .chat($0) }
+    }
+
+    private func select(_ value: SidebarSelection) {
+        switch value {
+        case .chat(let id): selectedPlazaID = nil; model.selectedSessionID = id
+        case .plaza(let id): selectedPlazaID = id
+        }
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 10) {
-                Image(systemName: "circle.hexagongrid.fill")
-                    .font(.system(size: 22, weight: .semibold))
-                    .foregroundStyle(.tint)
-                VStack(alignment: .leading, spacing: 1) {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                VStack(alignment: .leading, spacing: 2) {
                     Text("AgentDesk")
-                        .font(.headline)
+                        .titleText(16)
                     Text("独立会话 · 有界协作")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .metaText()
                 }
                 Spacer()
+                Button("设置", action: onSettings)
+                    .buttonStyle(GhostButtonStyle())
+                    .help("配置各官方 CLI 与模型")
             }
-            .padding(.horizontal, 16)
-            .padding(.top, 16)
-            .padding(.bottom, 12)
+            .padding(.horizontal, 14)
+            .padding(.top, 14)
+            .padding(.bottom, 10)
 
-            HStack(spacing: 8) {
-                Image(systemName: "magnifyingglass")
-                    .foregroundStyle(.secondary)
+            HStack(spacing: 4) {
                 TextField("搜索会话", text: $searchText)
-                    .textFieldStyle(.plain)
+                    .themedField()
                 if !searchText.isEmpty {
-                    Button { searchText = "" } label: {
-                        Image(systemName: "xmark.circle.fill")
-                            .foregroundStyle(.tertiary)
-                    }
-                    .buttonStyle(.plain)
+                    Button("✕") { searchText = "" }
+                        .buttonStyle(GhostButtonStyle())
+                        .help("清除搜索")
                 }
             }
             .padding(.horizontal, 10)
-            .padding(.vertical, 8)
-            .background(.quaternary.opacity(0.55), in: RoundedRectangle(cornerRadius: 9))
-            .padding(.horizontal, 12)
-            .padding(.bottom, 12)
+            .padding(.bottom, 8)
 
-            HStack {
-                Text("会话")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                Spacer()
-                Menu {
-                    ForEach(ProviderID.allCases) { provider in
-                        Button {
-                            selectedPlazaID = nil; onNewSession(provider)
-                        } label: {
-                            Label { Text(provider.name) } icon: { ProviderIcon(provider: provider, size: 16) }
-                        }
+            Button(action: onNewPlaza) { Text("+  新建讨论") }
+                .buttonStyle(GhostButtonStyle(fullWidth: true))
+                .padding(.horizontal, 8)
+            Menu {
+                ForEach(ProviderID.allCases) { provider in
+                    Button {
+                        selectedPlazaID = nil; onNewSession(provider)
+                    } label: {
+                        Label { Text(provider.name) } icon: { ProviderIcon(provider: provider, size: 16) }
                     }
-                } label: {
-                    Label("新建", systemImage: "plus")
-                        .labelStyle(.titleAndIcon)
-                        .font(.caption.weight(.medium))
                 }
-                .menuStyle(.borderlessButton)
-                .fixedSize()
+            } label: {
+                Text("+  新建会话")
             }
-            .padding(.horizontal, 16)
-            .padding(.bottom, 6)
+            .menuStyle(.button)
+            .buttonStyle(GhostButtonStyle(fullWidth: true))
+            .menuIndicator(.hidden)
+            .padding(.horizontal, 8)
 
-            Button(action: onNewPlaza) {
-                Label("新建讨论", systemImage: "plus.bubble")
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.borderless)
-            .padding(.horizontal, 16)
-            .padding(.vertical, 8)
-            List(selection: selection) {
-                Section("广场") {
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 1) {
+                    Text("广场").sectionLabel().padding(.horizontal, 8).padding(.top, 10).padding(.bottom, 4)
                     ForEach(plaza.records.filter { searchText.isEmpty || $0.room.title.localizedCaseInsensitiveContains(searchText) }) { record in
-                        HStack(spacing: 10) {
-                            Image(systemName: "person.3.fill").foregroundStyle(.indigo)
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(record.room.title).font(.subheadline.weight(.medium)).lineLimit(1)
-                                Text(record.room.members.map(\.name).joined(separator: " · ")).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                        SidebarRow(selected: selection == .plaza(record.id), action: { select(.plaza(record.id)) }) {
+                            HStack(spacing: -4) {
+                                ForEach(record.room.members.prefix(3)) { member in
+                                    ProviderIcon(provider: member.provider, size: 16)
+                                        .background(Theme.side, in: Circle())
+                                }
+                            }
+                            .frame(width: 32, alignment: .leading)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(record.room.title).font(Theme.sans(13)).lineLimit(1)
+                                Text(record.room.members.map(\.name).joined(separator: " · ")).metaText().lineLimit(1)
                             }
                             Spacer()
-                            if plaza.running.contains(record.id) { ProgressView().controlSize(.mini) }
-                        }.padding(.vertical, 5).tag(SidebarSelection.plaza(record.id))
-                            .contextMenu {
-                                Button("删除讨论记录", role: .destructive) { pendingPlazaDelete = record.id }.disabled(plaza.running.contains(record.id))
-                            }
+                            if plaza.running.contains(record.id) { RunningDot() }
+                        }
+                        .contextMenu {
+                            Button("删除讨论记录", role: .destructive) { pendingPlazaDelete = record.id }.disabled(plaza.running.contains(record.id))
+                        }
                     }
-                }
-                Section("私聊") {
+                    Text("私聊").sectionLabel().padding(.horizontal, 8).padding(.top, 12).padding(.bottom, 4)
                     ForEach(sessions) { session in
-                        SessionRow(session: session, isRunning: model.runningSessionIDs.contains(session.id))
-                            .tag(SidebarSelection.chat(session.id))
-                            .contextMenu {
-                                Button { onRename(session) } label: {
-                                    Label("重命名", systemImage: "pencil")
-                                }
-                                Divider()
-                                Button(role: .destructive) { pendingDelete = session } label: {
-                                    Label("删除会话", systemImage: "trash")
-                                }
-                            }
+                        SidebarRow(selected: selection == .chat(session.id), action: { select(.chat(session.id)) }) {
+                            SessionRow(session: session, isRunning: model.runningSessionIDs.contains(session.id))
+                        }
+                        .contextMenu {
+                            Button("重命名") { onRename(session) }
+                            Divider()
+                            Button("删除会话", role: .destructive) { pendingDelete = session }
+                        }
                     }
                 }
+                .padding(.horizontal, 8)
+                .padding(.bottom, 8)
             }
-            .listStyle(.sidebar)
-            Button(action: onMCP) { Label("MCP 工具", systemImage: "puzzlepiece.extension") }.buttonStyle(.bordered).frame(maxWidth: .infinity).padding(12)
-        }
-        .safeAreaInset(edge: .bottom) {
-            HStack(spacing: 8) {
-                Circle()
-                    .fill(.green)
-                    .frame(width: 7, height: 7)
-                Text("本地运行")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                Spacer()
-                Text("\(sessions.count) 个会话")
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
+
+            Hairline()
+            VStack(alignment: .leading, spacing: 8) {
+                Button(action: onMCP) { Text("MCP 工具").frame(maxWidth: .infinity) }
+                    .buttonStyle(SecondaryButtonStyle())
+                HStack(spacing: 6) {
+                    Circle()
+                        .fill(Theme.ok)
+                        .frame(width: 6, height: 6)
+                    Text("本地运行")
+                        .metaText()
+                    Spacer()
+                    Text("\(sessions.count) 个会话")
+                        .metaText()
+                }
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 10)
-            .background(.bar)
+            .padding(12)
         }
-        .confirmationDialog(
-            "删除这个会话？",
-            isPresented: Binding(
-                get: { pendingDelete != nil },
-                set: { if !$0 { pendingDelete = nil } }
-            ),
-            presenting: pendingDelete
-        ) { session in
-            Button("删除本地记录", role: .destructive) {
+        .background(Theme.side)
+        .sheet(item: $pendingDelete) { session in
+            ThemedDialog(title: "删除这个会话？",
+                         detail: "只移除 AgentDesk 的会话记录，不会删除官方 CLI 的 Session 或工作目录文件。",
+                         action: "删除本地记录") {
                 onDelete(session.id)
                 pendingDelete = nil
-            }
-            Button("取消", role: .cancel) { pendingDelete = nil }
-        } message: { _ in
-            Text("只移除 AgentDesk 的会话记录，不会删除官方 CLI 的 Session 或工作目录文件。")
+            } onCancel: { pendingDelete = nil }
         }
-        .confirmationDialog("删除讨论记录？", isPresented: Binding(get: { pendingPlazaDelete != nil }, set: { if !$0 { pendingPlazaDelete = nil } })) {
-            Button("删除本地讨论记录", role: .destructive) {
+        .sheet(isPresented: Binding(get: { pendingPlazaDelete != nil }, set: { if !$0 { pendingPlazaDelete = nil } })) {
+            ThemedDialog(title: "删除讨论记录？", detail: "成员工作目录和官方会话仍保留。", action: "删除本地讨论记录") {
                 if let id = pendingPlazaDelete { plaza.delete(id); if selectedPlazaID == id { selectedPlazaID = nil } }
                 pendingPlazaDelete = nil
-            }
-        } message: { Text("成员工作目录和官方会话仍保留。") }
+            } onCancel: { pendingPlazaDelete = nil }
+        }
+    }
+}
+
+/// A sidebar row like the canvas `.side-item`: muted until hovered or selected.
+private struct SidebarRow<Content: View>: View {
+    let selected: Bool
+    let action: () -> Void
+    @ViewBuilder let content: () -> Content
+    @State private var hovering = false
+
+    var body: some View {
+        HStack(spacing: 8, content: content)
+            .foregroundStyle(selected || hovering ? Theme.text : Theme.muted)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 6)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(selected || hovering ? Theme.selection : .clear, in: RoundedRectangle(cornerRadius: 7))
+            .contentShape(RoundedRectangle(cornerRadius: 7))
+            .onTapGesture(perform: action)
+            .onHover { hovering = $0 }
+            .accessibilityAddTraits(.isButton)
     }
 }
 
@@ -297,34 +290,25 @@ private struct SessionRow: View {
     let isRunning: Bool
 
     var body: some View {
-        HStack(spacing: 10) {
-            ProviderBadge(provider: session.provider, size: 30)
-            VStack(alignment: .leading, spacing: 3) {
+        HStack(spacing: 8) {
+            ProviderIcon(provider: session.provider, size: 18)
+            VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 5) {
                     Text(session.title)
-                        .font(.subheadline.weight(.medium))
+                        .font(Theme.sans(13))
                         .lineLimit(1)
-                    if isRunning {
-                        ProgressView()
-                            .controlSize(.mini)
-                    }
+                    if isRunning { RunningDot() }
                 }
-                HStack(spacing: 5) {
-                    Text(session.provider.name)
-                    Text("·")
-                    Text(session.modelID.isEmpty ? session.provider.runtimeName : session.modelID)
-                }
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
+                Text("\(session.provider.name) · \(session.modelID.isEmpty ? session.provider.runtimeName : session.modelID)")
+                    .metaText()
+                    .lineLimit(1)
             }
             Spacer(minLength: 2)
             Text(session.updatedAt, format: .relative(presentation: .named))
-                .font(.caption2)
-                .foregroundStyle(.tertiary)
+                .metaText(10)
+                .foregroundStyle(Theme.muted2)
                 .lineLimit(1)
         }
-        .padding(.vertical, 4)
         .contentShape(Rectangle())
     }
 }
@@ -342,22 +326,22 @@ private struct ChatDetail: View {
     var body: some View {
         VStack(spacing: 0) {
             ChatHeader(model: model, session: session, isRunning: isRunning, status: sessionStatus)
-            Divider()
+            Hairline()
             if session.messages.isEmpty {
                 ChatEmptyState(provider: session.provider)
             } else {
                 ScrollViewReader { proxy in
                     ScrollView {
-                        LazyVStack(alignment: .leading, spacing: 22) {
+                        LazyVStack(alignment: .leading, spacing: 18) {
                             ForEach(session.messages) { message in
                                 MessageRow(message: message, provider: session.provider, root: model.dataRoot)
                                     .id(message.id)
                             }
                         }
-                        .frame(maxWidth: 860, alignment: .leading)
+                        .frame(maxWidth: 760, alignment: .leading)
                         .frame(maxWidth: .infinity, alignment: .center)
                         .padding(.horizontal, 28)
-                        .padding(.vertical, 26)
+                        .padding(.vertical, 24)
                     }
                     .defaultScrollAnchor(.bottom)
                     .onChange(of: session.messages.count) { _, _ in
@@ -367,7 +351,6 @@ private struct ChatDetail: View {
                     }
                 }
             }
-            Divider()
             Composer(
                 text: $draft,
                 isRunning: isRunning,
@@ -381,8 +364,8 @@ private struct ChatDetail: View {
                 onStop: { model.stop(sessionID: session.id) }
             )
         }
-        .background(Color(nsColor: .windowBackgroundColor))
-        .overlay { if dropTargeted { RoundedRectangle(cornerRadius: 14).stroke(.tint, lineWidth: 3).padding(5).allowsHitTesting(false) } }
+        .background(Theme.bg)
+        .overlay { if dropTargeted { RoundedRectangle(cornerRadius: 14).strokeBorder(Theme.muted, style: StrokeStyle(lineWidth: 1.5, dash: [5, 4])).padding(6).allowsHitTesting(false) } }
         .onDrop(of: [UTType.fileURL.identifier], isTargeted: $dropTargeted) { providers in
             guard !isRunning else { return false }
             return attachments.drop(providers, into: session.id)
@@ -408,33 +391,30 @@ private struct ChatHeader: View {
     let status: String?
 
     var body: some View {
-        HStack(spacing: 12) {
-            ProviderBadge(provider: session.provider, size: 34)
+        HStack(spacing: 10) {
+            ProviderIcon(provider: session.provider, size: 22)
             VStack(alignment: .leading, spacing: 2) {
                 Text(session.title)
-                    .font(.headline)
+                    .font(Theme.sans(14, weight: .medium))
+                    .lineLimit(1)
                 HStack(spacing: 6) {
-                    Text(session.provider.name)
-                    Text("·")
-                    Text(session.modelID.isEmpty ? session.provider.runtimeName : session.modelID)
+                    Text("\(session.provider.name) · \(session.modelID.isEmpty ? session.provider.runtimeName : session.modelID)")
+                        .metaText()
                     if isRunning {
-                        Text("·")
-                        ProgressView().controlSize(.mini)
-                        Text(status ?? "正在思考")
+                        Text(status ?? "正在思考").metaText().foregroundStyle(Theme.run)
                     }
                 }
-                .font(.caption)
-                .foregroundStyle(.secondary)
                 .lineLimit(1)
             }
             Spacer()
             EffortControl(model: model, provider: session.provider,
                           modelID: Binding(get: { session.modelID }, set: { model.setSessionEffortVariant(session.id, modelID: $0) }),
                           effort: Binding(get: { session.reasoningEffort }, set: { model.setSessionEffort(session.id, effort: $0) }), compact: true)
-                .font(.caption).disabled(isRunning)
+                .disabled(isRunning)
         }
-        .padding(.horizontal, 24)
-        .padding(.vertical, 14)
+        .padding(.horizontal, 20)
+        .padding(.vertical, 12)
+        .background(Theme.panel)
     }
 }
 
@@ -446,49 +426,52 @@ private struct MessageRow: View {
     private var isUser: Bool { message.role == .user }
 
     var body: some View {
-        HStack(alignment: .top, spacing: 12) {
-            if isUser { Spacer(minLength: 64) }
-            else {
-                ProviderBadge(provider: provider, size: 28)
-            }
-            VStack(alignment: .leading, spacing: 7) {
-                Text(message.role == .assistant ? provider.name : "你")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                MarkdownMessageText(message: message)
-                    .textSelection(.enabled)
-                    .font(.body)
-                    .foregroundStyle(message.state == .failed ? .red : .primary)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .opacity(message.text.isEmpty && message.state == .streaming ? 0.65 : 1)
-                if let files = message.attachments, !files.isEmpty { AttachmentStrip(attachments: files, root: root) }
-                if message.state == .streaming {
-                    ProgressView().controlSize(.small)
-                }
-                if let ids = message.actualModelIDs, !ids.isEmpty {
-                    Text("实际模型：" + ids.map { ModelCatalog.claudeName(for: $0) }.joined(separator: "、"))
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                        .help(ids.joined(separator: ", "))
-                }
-                if !isUser && !message.text.isEmpty {
-                    ReplyExportMenu(text: message.text, title: "\(provider.name) 回复")
-                        .disabled(message.state == .streaming)
-                }
-            }
-            .padding(14)
-            .background(isUser ? Color.accentColor.opacity(0.13) : Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 16))
-            .overlay(RoundedRectangle(cornerRadius: 16).stroke(.primary.opacity(0.06), lineWidth: 1))
+        Group {
             if isUser {
-                Image(systemName: "person.fill").font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(.secondary).frame(width: 28, height: 28).background(.quaternary, in: Circle())
-            } else { Spacer(minLength: 56) }
-        }
-        .frame(maxWidth: .infinity, alignment: isUser ? .trailing : .leading)
-        .contextMenu {
-            Button { copy(message.text) } label: {
-                Label("复制", systemImage: "doc.on.doc")
+                VStack(alignment: .trailing, spacing: 4) {
+                    MarkdownMessageText(message: message)
+                        .textSelection(.enabled)
+                        .font(Theme.sans(13))
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.horizontal, 12).padding(.vertical, 8)
+                        .background(Theme.bubble, in: RoundedRectangle(cornerRadius: 14))
+                    if let files = message.attachments, !files.isEmpty { AttachmentStrip(attachments: files, root: root) }
+                }
+                .padding(.leading, 80)
+                .frame(maxWidth: .infinity, alignment: .trailing)
+            } else {
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(spacing: 6) {
+                        ProviderIcon(provider: provider, size: 14)
+                        Text(provider.name).metaText()
+                        if message.state == .streaming { RunningDot() }
+                    }
+                    MarkdownMessageText(message: message)
+                        .textSelection(.enabled)
+                        .font(Theme.serif(14))
+                        .lineSpacing(5)
+                        .foregroundStyle(message.state == .failed ? Theme.bad : Theme.text)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .opacity(message.text.isEmpty && message.state == .streaming ? 0.65 : 1)
+                    if let files = message.attachments, !files.isEmpty { AttachmentStrip(attachments: files, root: root) }
+                    HStack(spacing: 8) {
+                        if let ids = message.actualModelIDs, !ids.isEmpty {
+                            Text("实际模型：" + ids.map { ModelCatalog.claudeName(for: $0) }.joined(separator: "、"))
+                                .metaText()
+                                .help(ids.joined(separator: ", "))
+                        }
+                        if !message.text.isEmpty {
+                            ReplyExportMenu(text: message.text, title: "\(provider.name) 回复")
+                                .disabled(message.state == .streaming)
+                        }
+                    }
+                }
+                .padding(.trailing, 40)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
+        }
+        .contextMenu {
+            Button("复制") { copy(message.text) }
         }
         .copyable([message.text])
     }
@@ -532,55 +515,58 @@ private struct Composer: View {
     @StateObject private var speech = SpeechRecognitionController(localeIdentifier: "zh-CN")
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 6) {
             if !attachments.isEmpty {
                 AttachmentStrip(attachments: attachments, root: root, onRemove: onRemove)
                 AttachmentNotice(attachments: attachments, supportsImages: supportsImages)
             }
-            if isImporting { HStack { ProgressView().controlSize(.mini); Text("正在读取附件…").font(.caption).foregroundStyle(.secondary) } }
+            if isImporting { Text("正在读取附件…").metaText() }
             TextEditor(text: $text)
-                .font(.body)
+                .font(Theme.sans(13))
+                .foregroundStyle(Theme.text)
                 .scrollContentBackground(.hidden)
-                .frame(minHeight: 54, maxHeight: 150)
+                .frame(height: 56)
                 .overlay(alignment: .topLeading) {
                     if text.isEmpty {
                         Text("发送消息，或拖入图片、PDF、Word…")
-                            .foregroundStyle(.tertiary)
-                            .padding(.top, 8)
+                            .font(Theme.sans(13))
+                            .foregroundStyle(Theme.muted2)
                             .padding(.leading, 5)
                             .allowsHitTesting(false)
                     }
                 }
-            HStack {
-                Button(action: onAttach) { Label("附件", systemImage: "paperclip") }.disabled(isRunning || isImporting)
+            HStack(spacing: 6) {
+                Button("附件", action: onAttach)
+                    .buttonStyle(GhostButtonStyle())
+                    .disabled(isRunning || isImporting)
                 DictationButton(text: $text, controller: speech, isEnabled: !isRunning && !isImporting)
-                SpeechLocalePicker(controller: speech).labelsHidden().frame(width: 108)
-                Text("Cmd + Return 发送")
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
+                SpeechLocalePicker(controller: speech)
+                Text("⌘↩ 发送")
+                    .metaText()
+                    .foregroundStyle(Theme.muted2)
                 Spacer()
                 if isRunning {
-                    Button(action: onStop) {
-                        Label("停止", systemImage: "stop.fill")
-                    }
-                    .buttonStyle(.bordered)
-                    .tint(.orange)
+                    Button("■", action: onStop)
+                        .buttonStyle(SendButtonStyle(stop: true))
+                        .help("停止")
                 } else {
-                    Button { speech.stop(); onSend() } label: {
-                        Image(systemName: "arrow.up")
-                            .font(.system(size: 13, weight: .bold))
-                            .frame(width: 24, height: 24)
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .keyboardShortcut(.return, modifiers: .command)
-                    .disabled(isImporting || (text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && attachments.isEmpty))
-                    .help("发送消息")
+                    Button { speech.stop(); onSend() } label: { Text("↑") }
+                        .buttonStyle(SendButtonStyle())
+                        .keyboardShortcut(.return, modifiers: .command)
+                        .disabled(isImporting || (text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && attachments.isEmpty))
+                        .help("发送消息")
                 }
             }
         }
-        .padding(.horizontal, 24)
-        .padding(.vertical, 14)
-        .background(.bar)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background(Theme.card, in: RoundedRectangle(cornerRadius: 14))
+        .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(Theme.border2, lineWidth: 0.5))
+        .frame(maxWidth: 820)
+        .padding(.horizontal, 20)
+        .padding(.top, 6)
+        .padding(.bottom, 14)
+        .frame(maxWidth: .infinity)
         .onDisappear { speech.stop() }
     }
 }
@@ -588,13 +574,13 @@ private struct Composer: View {
 private struct ChatEmptyState: View {
     let provider: ProviderID
     var body: some View {
-        VStack(spacing: 14) {
-            ProviderBadge(provider: provider, size: 54)
+        VStack(spacing: 10) {
+            ProviderIcon(provider: provider, size: 36)
             Text("开始与 \(provider.name) 对话")
-                .font(.title3.weight(.semibold))
+                .titleText(18)
             Text("这是一个独立会话。消息和 Session ID 会单独保存。")
-                .font(.callout)
-                .foregroundStyle(.secondary)
+                .font(Theme.sans(12))
+                .foregroundStyle(Theme.muted)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding()
@@ -604,61 +590,27 @@ private struct ChatEmptyState: View {
 private struct WelcomeView: View {
     let onNewSession: (ProviderID) -> Void
     var body: some View {
-        VStack(spacing: 20) {
-            Image(systemName: "circle.hexagongrid.fill")
-                .font(.system(size: 54, weight: .light))
-                .foregroundStyle(.tint)
-            VStack(spacing: 7) {
+        VStack(spacing: 18) {
+            VStack(spacing: 6) {
                 Text("欢迎使用 AgentDesk")
-                    .font(.largeTitle.weight(.semibold))
+                    .titleText(24)
                 Text("为每个模型保留独立会话。选择一个模型开始。")
-                    .font(.body)
-                    .foregroundStyle(.secondary)
+                    .font(Theme.sans(13))
+                    .foregroundStyle(Theme.muted)
             }
-            HStack(spacing: 10) {
+            HStack(spacing: 8) {
                 ForEach(ProviderID.allCases) { provider in
                     Button {
                         onNewSession(provider)
                     } label: {
-                        Label { Text(provider.name) } icon: { ProviderIcon(provider: provider, size: 18) }
+                        HStack(spacing: 6) { ProviderIcon(provider: provider, size: 15); Text(provider.name) }
                     }
-                    .buttonStyle(.bordered)
+                    .buttonStyle(SecondaryButtonStyle())
                 }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding()
-    }
-}
-
-private struct ErrorBanner: View {
-    let message: String
-    let onDismiss: () -> Void
-
-    var body: some View {
-        HStack(spacing: 9) {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .foregroundStyle(.orange)
-            Text(message)
-                .font(.callout)
-                .lineLimit(2)
-            Spacer(minLength: 8)
-            Button("关闭", action: onDismiss)
-                .buttonStyle(.borderless)
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 9)
-        .frame(maxWidth: .infinity)
-        .background(.orange.opacity(0.11))
-        .overlay(alignment: .bottom) { Divider() }
-    }
-}
-
-private struct ProviderBadge: View {
-    let provider: ProviderID
-    let size: CGFloat
-    var body: some View {
-        ProviderIcon(provider: provider, size: size)
     }
 }
 
@@ -669,33 +621,46 @@ private struct RenameSessionView: View {
     @FocusState private var focused: Bool
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        VStack(alignment: .leading, spacing: 14) {
             Text("重命名会话")
-                .font(.headline)
+                .font(Theme.sans(15, weight: .semibold))
             TextField("会话名称", text: $title)
-                .textFieldStyle(.roundedBorder)
+                .themedField()
                 .focused($focused)
                 .onSubmit(onSave)
-            HStack {
+            HStack(spacing: 8) {
                 Spacer()
                 Button("取消", action: onCancel)
+                    .buttonStyle(SecondaryButtonStyle())
+                    .keyboardShortcut(.cancelAction)
                 Button("保存", action: onSave)
+                    .buttonStyle(PrimaryButtonStyle())
                     .keyboardShortcut(.defaultAction)
             }
         }
-        .padding(22)
+        .padding(20)
         .frame(width: 360)
+        .themedSurface(Theme.card)
+        .presentationBackground(Theme.card)
         .onAppear { focused = true }
     }
 }
 
-extension ProviderID {
-    var tint: Color {
-        switch self {
-        case .claude: return .orange
-        case .codex: return .mint
-        case .grok: return .purple
-        case .gemini: return .blue
-        }
+/// The square send / stop button of the composer (canvas `.send`).
+struct SendButtonStyle: ButtonStyle {
+    var stop = false
+    @Environment(\.isEnabled) private var enabled
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.system(size: stop ? 10 : 15, weight: .semibold))
+            .foregroundStyle(stop ? Theme.bg : Theme.onPrimary)
+            .frame(width: 28, height: 28)
+            .background(stop ? Theme.text : Theme.primary, in: RoundedRectangle(cornerRadius: 8))
+            .opacity(enabled ? (configuration.isPressed ? 0.8 : 1) : 0.35)
+            .contentShape(RoundedRectangle(cornerRadius: 8))
     }
+}
+
+extension ProviderID {
+    var tint: Color { Theme.provider(self) }
 }
