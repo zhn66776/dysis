@@ -185,7 +185,7 @@ final class AppModel: ObservableObject {
             sessions[index].title = String(prompt.replacingOccurrences(of: "\n", with: " ").prefix(32))
         }
         let assistantID = UUID()
-        sessions[index].messages.append(ChatMessage(role: .user, text: prompt, attachments: attachments.isEmpty ? nil : attachments, contextSources: context.isEmpty ? nil : context.sourceLabels))
+        sessions[index].messages.append(ChatMessage(role: .user, text: prompt, attachments: attachments.isEmpty ? nil : attachments, contextSources: context.isEmpty && context.fork == nil ? nil : context.sourceLabels))
         sessions[index].messages.append(ChatMessage(id: assistantID, role: .assistant, text: "", state: .streaming))
         sessions[index].updatedAt = Date()
         let session = sessions[index]

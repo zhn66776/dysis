@@ -175,11 +175,18 @@ public final class CLIProcess: @unchecked Sendable {
             throw AgentError.unavailable("无法进入工作目录：\(directory.path)")
         }
 #endif
+        // Start the tool with every signal at its default action and none
+        // blocked. posix_spawn otherwise inherits the spawning thread's mask,
+        // and Swift concurrency / dispatch worker threads block signals such
+        // as SIGCHLD: Codex then never learns that its own helper processes
+        // (shell snapshot, hooks) exited, and its turn waits forever.
         var defaultSignals = sigset_t()
-        guard sigemptyset(&defaultSignals) == 0,
-              sigaddset(&defaultSignals, SIGPIPE) == 0,
+        var unblocked = sigset_t()
+        guard sigfillset(&defaultSignals) == 0,
+              sigemptyset(&unblocked) == 0,
               posix_spawnattr_setsigdefault(&attributes, &defaultSignals) == 0,
-              posix_spawnattr_setflags(&attributes, Int16(POSIX_SPAWN_SETPGROUP | POSIX_SPAWN_SETSIGDEF | POSIX_SPAWN_CLOEXEC_DEFAULT)) == 0,
+              posix_spawnattr_setsigmask(&attributes, &unblocked) == 0,
+              posix_spawnattr_setflags(&attributes, Int16(POSIX_SPAWN_SETPGROUP | POSIX_SPAWN_SETSIGDEF | POSIX_SPAWN_SETSIGMASK | POSIX_SPAWN_CLOEXEC_DEFAULT)) == 0,
               posix_spawnattr_setpgroup(&attributes, 0) == 0 else {
             throw AgentError.processFailure("无法设置官方工具的独立进程组。")
         }
