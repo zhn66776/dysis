@@ -22,6 +22,8 @@ bash scripts/build-app.sh
 open build/AgentDesk.app
 ```
 
+CI (`.github/workflows/ci.yml`) runs `swift test` and the canvas page's `npm ci`, `npm test` and `npm run build` on a macOS runner for every push and pull request; tests use fixture CLIs only, with no official CLI, login or model call.
+
 Open `Package.swift` in Xcode to develop the app. The build script produces a locally ad-hoc-signed `.app`, not a notarized distribution.
 
 ## Official login

@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: macos-26
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: canvas-web/package-lock.json
+      - name: Toolchain
+        # Process tests run fixture CLIs written in Python at /usr/bin/python3; no official CLI, login or network.
+        run: |
+          swift --version
+          /usr/bin/python3 --version
+      - name: Swift tests
+        run: swift test
+      - name: Canvas install
+        working-directory: canvas-web
+        run: npm ci
+      - name: Canvas tests
+        working-directory: canvas-web
+        run: npm test
+      - name: Canvas build
+        working-directory: canvas-web
+        run: npm run build
