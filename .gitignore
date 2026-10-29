@@ -1,0 +1,6 @@
+.build/
+.swiftpm/
+build/
+.DS_Store
+canvas-web/node_modules/
+canvas-web/dist/

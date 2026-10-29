@@ -1,0 +1,22 @@
+AgentDesk web prototype asset credits
+
+Current Living Office: voxel characters, furnishings, room, outdoor scenery
+and pixel textures are authored locally for this project. No reference
+photography is embedded.
+
+Earlier prototype assets retained, not loaded by the current scene:
+
+Wood floor scan
+  Asset: Wood Floor
+  Author: Dimitrios Savva
+  License: CC0
+  Source: https://polyhaven.com/a/wood_floor
+  Local files:
+    assets/wood-floor-color.jpg
+    assets/wood-floor-normal.jpg
+    assets/wood-floor-roughness.jpg
+
+Three.js
+  Local runtime: vendor/three.module.js
+  License: MIT
+  License file: vendor/THREE-LICENSE.txt

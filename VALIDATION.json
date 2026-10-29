@@ -1,0 +1,245 @@
+{
+  "date": "2026-10-29",
+  "app_version": "0.3.0",
+  "build": "Release arm64, ad-hoc signed; build/AgentDesk.app",
+  "offline_tests": {
+    "passed": 81,
+    "failed": 0,
+    "skipped": 0,
+    "log": "build/multimodal-tests-final.log",
+    "last_run_for_version": "0.3.0"
+  },
+  "final_process_tests": {
+    "passed": 5,
+    "failed": 0,
+    "log": "build/process-tests-final.log"
+  },
+  "new_live_model_requests": 0,
+  "external_mcp_services_configured_or_contacted": 0,
+  "ui_validation": {
+    "data_directory": "build/ui-validation",
+    "all_model_responses_local_simulation": true,
+    "two_members_three_rounds": {
+      "started": 6,
+      "completed": 6,
+      "extra_calls": 0
+    },
+    "stop_during_meeting": {
+      "started": 1,
+      "maximum": 6,
+      "state": "cancelled",
+      "additional_members_started": 0
+    },
+    "manual_mention": {
+      "started": 1,
+      "maximum": 1,
+      "state": "cancelled"
+    },
+    "new_room_created_with_distinct_workspaces": true,
+    "restart_preserves_history_and_does_not_resume": true,
+    "stdio_mcp_discover_call_and_attach_to_composer": true,
+    "mcp_attach_did_not_send_model_request": true,
+    "final_stop_status_verified": true
+  },
+  "limits": {
+    "members": 4,
+    "rounds": 3,
+    "max_calls": 12,
+    "turn_timeout_seconds": 120,
+    "total_timeout_seconds": 900,
+    "reply_character_limit": 8000,
+    "automatic_retries": 0
+  },
+  "scope": "Bounded discussion with text/native image inputs through supported official adapters, local document extraction and reply export, user-operated MCP, and user-started on-device dictation. No trading, autonomous file execution or AI image-generation backend.",
+  "previous_milestone": {
+    "date": "2026-10-29",
+    "app_version": "0.1.1",
+    "build": "Release arm64; locally ad-hoc signed macOS app",
+    "offline_tests": {
+      "passed": 20,
+      "failed": 0
+    },
+    "live_tests": [
+      {
+        "provider": "codex",
+        "model_id": "gpt-6.1-sol",
+        "user_messages": 2,
+        "assistant_messages": 2,
+        "all_replies_complete": true,
+        "official_session_saved": true,
+        "resumed_context_verified": true
+      },
+      {
+        "provider": "gemini",
+        "model_id": "gemini-4-argon-medium",
+        "user_messages": 2,
+        "assistant_messages": 2,
+        "all_replies_complete": true,
+        "official_session_saved": true,
+        "resumed_context_verified": true
+      },
+      {
+        "provider": "grok",
+        "model_id": "grok-4.7-medium",
+        "user_messages": 2,
+        "assistant_messages": 2,
+        "all_replies_complete": true,
+        "official_session_saved": true,
+        "resumed_context_verified": true
+      },
+      {
+        "provider": "claude",
+        "model_id": "sonnet",
+        "user_messages": 2,
+        "assistant_messages": 2,
+        "all_replies_complete": true,
+        "official_session_saved": true,
+        "resumed_context_verified": true
+      }
+    ],
+    "approved_live_request_limit": 8,
+    "live_requests_sent": 8,
+    "history_survived_app_restart": true,
+    "all_official_session_ids_distinct": true,
+    "all_working_directories_distinct": true,
+    "authentication": "Official CLI-managed subscription logins; no API keys supplied by AgentDesk",
+    "billing": "Extra usage disabled as confirmed by user; account billing ledger not independently audited",
+    "scope": "Independent chat sessions. No Plaza, DeepSeek, or brokerage integration.",
+    "live_test_build_version": "0.1.0",
+    "model_selection_update": {
+      "documented_version_ids": [
+        "claude-opus-5-5",
+        "claude-opus-5",
+        "claude-sonnet-5-5",
+        "claude-sonnet-5",
+        "claude-haiku-5-5"
+      ],
+      "additional_live_requests": 0,
+      "account_entitlements_not_verified_for_each_version": true,
+      "ui_relaunch_required": true
+    }
+  },
+  "final_application": {
+    "version": "0.3.0",
+    "original_five_chats_visible": true,
+    "formal_data_directory_restored": true,
+    "running_executable": "/Users/haonanzhang/agentic-app/build/AgentDesk.app/Contents/MacOS/AgentDesk",
+    "release_and_signed_bundle_macho_uuid_match": true,
+    "code_signature_verified": true
+  },
+  "effort_update": {
+    "live_model_requests": 0,
+    "read_only_capability_checks": {
+      "claude_cli_effort": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
+      "codex_gpt_6_1_sol": {
+        "default": "low",
+        "supported": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max",
+          "ultra"
+        ]
+      },
+      "cursor_grok_4_7": [
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ],
+      "cursor_gemini_4_argon": [
+        "low",
+        "medium",
+        "high"
+      ]
+    },
+    "ui_offline": {
+      "private_chat_high_passed_to_fixture": true,
+      "group_members_low_high_passed_independently": true,
+      "selections_persisted": true
+    },
+    "defaults_and_resume_tested": true,
+    "legacy_records_compatible": true,
+    "provider_subagents_disabled": true,
+    "notes": "Cursor effort uses exact discovered same-family IDs and preserves Fast mode. Codex discovers model defaults before turn/start. No real model turns were started."
+  },
+  "settings_icons_update": {
+    "version": "0.2.2",
+    "release_build_verified": true,
+    "ordinary_settings_hide_executable_paths_and_login_commands": true,
+    "developer_mode_shortcut": "Cmd+Shift+D",
+    "toggle_both_directions_verified": true,
+    "restart_from_developer_mode_returns_to_normal": true,
+    "settings_scroll_window": "720x650",
+    "provider_svg_count": 6,
+    "all_svg_assets_native_render_verified": true,
+    "light_and_dark_assets_checked": true,
+    "sidebar_and_settings_branded_icons_verified": true,
+    "existing_sessions_and_configuration_retained": true,
+    "model_requests_sent": 0,
+    "build_log": "build/settings-icons-release.log",
+    "source_notes": [
+      "Resources/ProviderIcons/CLAUDE_OPENAI_SOURCES.md",
+      "Resources/ProviderIcons/GROK_GEMINI_SOURCES.md"
+    ]
+  },
+  "multimodal_update": {
+    "version": "0.3.0",
+    "bubbles": "user right; assistant left, private and group",
+    "input_types_verified_locally": [
+      "PNG",
+      "JPEG normalization",
+      "PDF text",
+      "DOCX text",
+      "UTF-8 text"
+    ],
+    "private_ui_four_attachments_delivered_to_fake_cli": true,
+    "group_ui_two_members_received_image": true,
+    "image_protocol_tests": [
+      "Claude streaming input new/resume/effort",
+      "Codex localImage and modality checks",
+      "Cursor rejects unsupported image input"
+    ],
+    "reply_exports": {
+      "pdf_ui_save_verified": true,
+      "pdf_cjk_four_page_export_verified": true,
+      "png_cjk_visual_check": true,
+      "text_supported": true
+    },
+    "speech": {
+      "ui_added": true,
+      "starts_only_on_click": true,
+      "on_device_required": true,
+      "languages": [
+        "zh-CN",
+        "en-GB",
+        "en-US"
+      ],
+      "max_seconds": 60,
+      "live_microphone_tested": false,
+      "permissions_requested_during_validation": false
+    },
+    "limits": {
+      "files_per_message": 6,
+      "images_per_message": 4,
+      "source_file_MB": 20,
+      "model_image_long_edge": 3072,
+      "model_image_MB": 4
+    },
+    "limitations": [
+      "Cursor Grok/Gemini image input unavailable in this adapter",
+      "PDF/Word extraction is text-only; scanned PDFs require OCR",
+      "PNG export renders reply text, not AI illustration generation",
+      "No live provider inference calls made for this update"
+    ],
+    "live_model_requests": 0,
+    "release_build_log": "build/multimodal-release.log"
+  }
+}

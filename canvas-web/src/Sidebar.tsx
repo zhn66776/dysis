@@ -1,0 +1,50 @@
+import { useState } from 'react'
+import { send } from './bridge'
+import type { AppState } from './types'
+
+export function Sidebar({ state, collapsed, onToggle }: { state: AppState; collapsed: boolean; onToggle(): void }) {
+  const [renaming, setRenaming] = useState<string | null>(null)
+  if (collapsed) {
+    return (
+      <nav className="rail">
+        <button className="icon-btn" aria-label="展开侧栏" onClick={onToggle}>☰</button>
+        <button className="icon-btn" aria-label="新画布" onClick={() => send({ type: 'board.create' })}>＋</button>
+        <span className="spacer" />
+        <button className="icon-btn" aria-label="设置" onClick={() => send({ type: 'app.open', window: 'settings' })}>⚙</button>
+      </nav>
+    )
+  }
+  return (
+    <nav className="sidebar">
+      <div className="brand-row">
+        <span className="brand">AgentDesk</span>
+        <button className="icon-btn" aria-label="收起侧栏" onClick={onToggle}>‹</button>
+      </div>
+      <button className="side-item new" onClick={() => send({ type: 'board.create' })}>＋ 新画布</button>
+      <div className="side-label">画布</div>
+      <div className="board-list">
+        {state.boards.map(b => (
+          <div key={b.id} className={`side-item board${b.id === state.board?.id ? ' on' : ''}`} onClick={() => send({ type: 'board.select', boardID: b.id })} onDoubleClick={() => setRenaming(b.id)}>
+            {renaming === b.id ? (
+              <input
+                className="rename" autoFocus defaultValue={b.title} onClick={e => e.stopPropagation()}
+                onBlur={e => { const t = e.target.value.trim(); if (t && t !== b.title) send({ type: 'board.rename', boardID: b.id, title: t }); setRenaming(null) }}
+                onKeyDown={e => { if (e.key === 'Enter' && !e.nativeEvent.isComposing) (e.target as HTMLInputElement).blur(); if (e.key === 'Escape') setRenaming(null) }}
+              />
+            ) : (
+              <>
+                <span className="board-title">{b.title}</span>
+                <span className="count">{b.nodeCount}</span>
+                <button className="del" aria-label={`删除画布 ${b.title}`} onClick={e => { e.stopPropagation(); send({ type: 'board.delete', boardID: b.id }) }}>✕</button>
+              </>
+            )}
+          </div>
+        ))}
+      </div>
+      <span className="spacer" />
+      <button className="side-item" onClick={() => send({ type: 'app.open', window: 'classic' })} title="讨论室、附件、听写、导出暂时在这里">经典界面</button>
+      <button className="side-item" onClick={() => send({ type: 'app.open', window: 'mcp' })}>MCP 工具</button>
+      <button className="side-item" onClick={() => send({ type: 'app.open', window: 'settings' })}>设置</button>
+    </nav>
+  )
+}

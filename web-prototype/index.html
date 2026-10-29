@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f4f1e8">
+  <meta name="description" content="AgentDesk Living Office 三维工作空间预览">
+  <title>AgentDesk · The Living Office</title>
+  <link rel="stylesheet" href="styles.css?v=7">
+  <link rel="stylesheet" href="scene.css?v=7">
+</head>
+<body>
+  <main class="app-shell">
+    <header class="topbar">
+      <a class="brand" href="#space" aria-label="AgentDesk 主页"><span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i><i></i></span><span class="brand-name">agentdesk</span><span class="brand-divider"></span><span class="brand-sub">THE LIVING OFFICE</span></a>
+      <div class="top-meta"><span class="demo-pill" id="bridge-badge"><i></i> 本地演示</span><span class="top-separator" aria-hidden="true"></span><time id="clock">--:--</time><span id="timezone">--</span><button class="top-action" id="connection-button" type="button">连接</button><button class="top-action" id="portfolio-button" type="button">投资组合</button></div>
+    </header>
+
+    <section class="workspace" id="space" aria-label="AgentDesk Living Office">
+      <div class="space-intro"><div><div class="eyebrow"><i></i> THE LIVING OFFICE / 01</div><h1>让工作在空间里发生<span>.</span></h1><p>一个会回应你的房间：四位伙伴、四张桌面，以及一处可以坐下来的地方。</p></div><div class="space-summary"><strong id="agent-count">04</strong><span>位伙伴<br>已准备</span></div></div>
+
+      <div class="office-card">
+        <div class="scene-toolbar"><div class="scene-label"><span class="live-dot"></span><strong id="room-title">开放工作区</strong><span class="label-separator" aria-hidden="true"></span><span id="period-label">自动 · 下午</span></div><div class="toolbar-right"><span class="scene-note">LOCAL SPACE</span><button class="icon-button" id="lighting-button" type="button" aria-label="打开光照设置" aria-expanded="false" title="光照设置">☼</button></div></div>
+        <div class="scene-wrap"><div id="office-scene" class="scene-host" aria-label="固定俯视的三维办公室"></div><div class="scene-hint" id="scene-hint"><span>✦</span><span>点击伙伴或沙发开始</span></div><div class="lighting-menu" id="lighting-menu" hidden><div class="menu-title">光照时刻 <span>LIGHTING</span></div><button class="period-option active" type="button" data-period="auto">跟随本地时间 <span>自动</span></button><div class="period-grid"><button type="button" data-period="dawn">清晨</button><button type="button" data-period="morning">上午</button><button type="button" data-period="noon">中午</button><button type="button" data-period="afternoon">下午</button><button type="button" data-period="dusk">黄昏</button><button type="button" data-period="night">夜晚</button></div><p>让一天的光线改变空间的气氛。</p></div></div>
+        <div class="scene-footer"><span class="fixed-view-label"><span class="location-dot"></span> 固定俯视 · 点击伙伴互动</span><div class="scene-location"><span class="location-dot"></span> AGENTDESK STUDIO <span>·</span> 01</div></div>
+      </div>
+
+      <div class="workspace-lower"><div class="roster" aria-label="伙伴工位"><span class="roster-label">伙伴工位</span><div class="roster-list" id="roster-list"></div></div><div class="lower-note"><span class="ready-dot"></span> 点击沙发，邀请大家一起坐下。</div></div>
+    </section>
+
+    <aside id="agent-panel" class="side-panel agent-panel" aria-label="伙伴详情" hidden><button class="close-button" data-close-panel type="button" aria-label="关闭伙伴详情">×</button><div class="panel-kicker">PRIVATE OFFICE</div><div class="panel-person"><div id="panel-avatar" class="panel-avatar">✦</div><div><h2 id="agent-name"></h2><p id="agent-role"></p></div><span id="agent-status" class="status-badge">正在到达</span></div><div class="provider-line"><span id="agent-provider"></span><span id="agent-model">模型未选择</span><span id="agent-capabilities">能力未读取</span></div><div class="panel-rule"></div><p class="panel-description" id="panel-description">伙伴正在走进你的办公室。<br><span>这里是本地界面演示，不会连接真实 Agent。</span></p><div class="conversation" id="conversation"><div class="conversation-empty"><span>✳</span><strong>从一个问题开始</strong><p>在下方写下你的想法。</p></div></div><div class="idle-line" id="idle-line" data-idle-seconds="60" hidden>闲置 <strong id="idle-seconds">60</strong> 秒后回到工位</div></aside>
+
+    <aside id="group-panel" class="side-panel group-panel" aria-label="休息区讨论" hidden><button class="close-button" data-close-panel type="button" aria-label="关闭休息区讨论面板">×</button><div class="panel-kicker">LOUNGE DISCUSSION</div><h2>一起坐下来</h2><p class="panel-description">选择一起参与的伙伴。在这里，把大家的想法放到一起。</p><div id="group-agent-list" class="group-agent-list"></div><div class="group-note" id="group-note">至少选择 2 位伙伴开始群聊。</div><button class="primary-button" id="apply-group" type="button">让选中的伙伴留下</button><button class="text-button" id="end-discussion" type="button">结束讨论，让大家回到工位</button><div class="conversation group-conversation" id="group-conversation"><div class="conversation-empty"><span>✳</span><strong>还没有讨论</strong><p>选择伙伴后，在下方发起。</p></div></div></aside>
+
+    <aside id="connection-panel" class="side-panel connection-panel" aria-label="连接状态" hidden><button class="close-button" data-close-panel type="button" aria-label="关闭连接状态">×</button><div class="panel-kicker">CONNECTION BOUNDARY</div><h2>连接状态</h2><p class="panel-description">这里显示页面目前获得的连接能力，四个 Provider 账户仍未接入。</p><div class="connection-state" id="connection-state"></div><div class="provider-status-list" id="provider-status-list"></div><div class="method-list" id="method-list"></div><p class="connection-foot">连接状态只在本页面会话中展示。</p></aside>
+
+    <aside id="portfolio-panel" class="side-panel portfolio-panel" aria-label="投资组合" hidden><button class="close-button" data-close-panel type="button" aria-label="关闭投资组合">×</button><div class="panel-kicker">PORTFOLIO SURFACE</div><h2>投资组合</h2><div class="portfolio-source" id="portfolio-source">来源 · 未连接</div><div class="portfolio-summary"><div><span>总资产</span><strong id="portfolio-total">—</strong></div><div><span>今日变化</span><strong id="portfolio-change">—</strong></div></div><div id="portfolio-empty" class="portfolio-empty">暂时没有可展示的持仓数据。<br><span>接入数据源后，这里会显示持仓和价格序列。</span></div><div id="portfolio-chart" class="portfolio-chart" hidden></div><div id="portfolio-positions" class="portfolio-positions"></div></aside>
+
+    <div class="composer-wrap"><div class="composer"><button class="composer-settings" id="composer-lighting" type="button" aria-label="打开光照设置" title="光照设置">☷</button><div class="composer-body"><div class="composer-label" id="composer-label">选择一位伙伴，邀请到你的办公室</div><form id="prompt-form"><input id="prompt-input" type="text" maxlength="500" autocomplete="off" placeholder="选择伙伴后，在这里写下你的想法…" disabled><button id="submit-button" type="submit" disabled aria-label="发送消息"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M21 3 10 14M21 3l-7 18-4-7-7-4 18-7Z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></svg></button></form></div><span class="composer-status" id="composer-status">本地演示</span></div><div class="composer-foot">本地交互演示 · 消息不会发送给真实 Agent <span id="composer-idle" hidden> · <strong id="composer-idle-seconds"></strong></span></div></div>
+  </main>
+  <script type="module" src="app.js?v=7"></script>
+</body>
+</html>

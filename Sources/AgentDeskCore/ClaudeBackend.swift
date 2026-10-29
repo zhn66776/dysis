@@ -1,0 +1,295 @@
+import Foundation
+
+/// The narrow, text-only Claude Code adapter used by the first UI.
+///
+/// Claude Code remains the owner of authentication and session storage.  This
+/// adapter only starts the signed binary, consumes its documented JSONL
+/// stream, and never reads the credential store.
+public struct ClaudeBackend: AgentBackend, Sendable {
+    public init() {}
+
+    public func stream(_ request: AgentRequest) -> AsyncThrowingStream<AgentEvent, Error> {
+        AsyncThrowingStream { continuation in
+            let task = Task {
+                do {
+                    try Task.checkCancellation()
+                    guard !request.modelID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                        throw AgentError.unavailable("Claude 模型未配置，已停止请求。")
+                    }
+                    var environment = RuntimeEnvironment.subscriptionOnly()
+                    environment["DISABLE_AUTOUPDATER"] = "1"
+                    try await ClaudeBackend.requireSubscription(request: request, environment: environment)
+
+                    var arguments = try ClaudeBackend.commonArguments(modelID: request.modelID, effort: request.reasoningEffort)
+                    arguments += try ClaudeBackend.sessionArguments(for: request)
+                    let fork = request.remoteSessionID?.isEmpty == false ? nil : request.forkFrom
+                    let imageContent = try MultimodalInputSupport.claudeContent(prompt: request.prompt, images: request.images)
+                    if request.images.isEmpty {
+                        arguments += ["-p", request.prompt]
+                    } else {
+                        // Claude Code's documented realtime JSONL input accepts
+                        // Anthropic user content blocks, including base64 image
+                        // blocks. Keep this path explicit: a text-only CLI run
+                        // must never silently discard an attachment.
+                        arguments += ["-p", "--input-format", "stream-json"]
+                    }
+
+                    let process = CLIProcess(
+                        executable: request.executableURL,
+                        arguments: arguments,
+                        directory: request.workingDirectory,
+                        environment: environment
+                    )
+                    defer { process.terminate() }
+                    try process.start()
+                    if request.images.isEmpty {
+                        process.finishInput()
+                    } else {
+                        // This is the same streaming-input message shape used
+                        // by Anthropic's Claude Agent SDK image example:
+                        // user.message.content contains a base64 image block.
+                        // The CLI's single-message -p mode cannot carry image
+                        // attachments, so images deliberately use this stream
+                        // path and include the stable session binding fields.
+                        let sessionID = request.remoteSessionID ?? fork?.remoteSessionID ?? request.localSessionID.uuidString
+                        try process.writeJSON([
+                            "type": "user",
+                            "message": ["role": "user", "content": imageContent],
+                            "parent_tool_use_id": NSNull(),
+                            "session_id": sessionID
+                        ])
+                        process.finishInput()
+                    }
+                    var accumulatedText = ""
+                    var sawResult = false
+                    var sawSessionID = false
+                    // A fork's new session ID is reported only after a successful
+                    // result. A failed resume still prints a fresh, empty session
+                    // ID, and keeping it would detach the node from its history.
+                    var forkedSessionID: String?
+                    var replyModels = Set<String>()
+                    var exitCode: Int32?
+
+                    for await event in process.events {
+                        try Task.checkCancellation()
+                        switch event {
+                        case .stdoutLine(let line):
+                            guard !line.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { continue }
+                            guard let data = line.data(using: .utf8) else { continue }
+                            guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                                // A diagnostic line should not be rendered as a model answer.
+                                continue
+                            }
+                            let parsed = ClaudeJSONEventParser.parse(object)
+                            if let sessionID = parsed.sessionID {
+                                sawSessionID = true
+                                if let fork {
+                                    guard sessionID != fork.remoteSessionID else {
+                                        throw AgentError.protocolFailure("Claude Code 没有创建新的分叉会话，已停止，避免改动父节点的会话。")
+                                    }
+                                    forkedSessionID = sessionID
+                                } else {
+                                    continuation.yield(.sessionID(sessionID))
+                                }
+                            }
+                            if let delta = parsed.textDelta, !delta.isEmpty {
+                                accumulatedText += delta
+                                continuation.yield(.textDelta(delta))
+                            }
+                            if let finalText = parsed.finalText {
+                                sawResult = true
+                                if !finalText.isEmpty, finalText != accumulatedText {
+                                    continuation.yield(.replaceText(finalText))
+                                }
+                            }
+                            if let status = parsed.status, !status.isEmpty {
+                                continuation.yield(.status(status))
+                            }
+                            if let models = parsed.actualModelIDs, !models.isEmpty {
+                                if object["type"] as? String == "assistant" {
+                                    replyModels.formUnion(models)
+                                    continuation.yield(.actualModels(replyModels.sorted()))
+                                } else if replyModels.isEmpty {
+                                    continuation.yield(.actualModels(models))
+                                }
+                            }
+                            if let usage = parsed.contextUsage { continuation.yield(.contextUsage(usage)) }
+                            if let quota = parsed.quota { continuation.yield(.quota(quota)) }
+                            if parsed.isFailure {
+                                throw AgentError.protocolFailure(SafeText.redact(parsed.failureMessage ?? "Claude Code 返回失败结果。"))
+                            }
+                        case .stderrLine(let line):
+                            // Stderr may contain paths or account details.  Do not
+                            // surface it verbatim in the chat transcript.
+                            if line.localizedCaseInsensitiveContains("login") || line.localizedCaseInsensitiveContains("auth") {
+                                continuation.yield(.status("Claude Code 认证状态需要检查。"))
+                            }
+                        case .exited(let code):
+                            exitCode = code
+                        }
+                    }
+                    try Task.checkCancellation()
+                    guard let exitCode else {
+                        throw AgentError.processFailure("Claude Code 未返回进程退出状态。")
+                    }
+                    if exitCode != 0 {
+                        throw AgentError.processFailure("Claude Code 退出码为 \(exitCode)。")
+                    }
+                    if !sawSessionID {
+                        throw AgentError.protocolFailure("Claude Code 没有返回 Session ID。")
+                    }
+                    if !sawResult {
+                        throw AgentError.protocolFailure("Claude Code 没有返回最终结果。")
+                    }
+                    if let forkedSessionID { continuation.yield(.sessionID(forkedSessionID)) }
+                    continuation.yield(.completed)
+                    continuation.finish()
+                } catch is CancellationError {
+                    continuation.finish(throwing: CancellationError())
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
+    }
+
+    /// Resume, native fork (`--fork-session`, latest state only) or a new session.
+    static func sessionArguments(for request: AgentRequest) throws -> [String] {
+        if let remoteID = request.remoteSessionID, !remoteID.isEmpty { return ["--resume", remoteID] }
+        if let fork = request.forkFrom {
+            guard fork.throughTurnID == nil else {
+                throw AgentError.unavailable("Claude Code 只能从会话的最新一轮分叉。")
+            }
+            return ["--resume", fork.remoteSessionID, "--fork-session"]
+        }
+        return ["--session-id", request.localSessionID.uuidString]
+    }
+
+    private static func commonArguments(modelID: String, effort: String?) throws -> [String] {
+        var arguments = [
+            "--safe-mode", "--restricted", "--strict-mcp-config",
+            "--mcp-config", "{\"mcpServers\":{}}",
+            "--tools", "", "--disallowedTools", "mcp__*",
+            "--permission-mode", "dontAsk", "--permission-prompts", "none",
+            "--max-turns", "1", "--model", modelID,
+            "--output-format", "stream-json", "--verbose",
+            "--include-partial-messages"
+        ]
+        if let rawEffort = effort, !rawEffort.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            guard let normalized = ReasoningEffortCatalog.normalized(rawEffort, choices: ReasoningEffortCatalog.claudeChoices) else {
+                throw AgentError.unavailable("Claude 推理深度无效。可选：\(ReasoningEffortCatalog.claudeChoices.joined(separator: ", "))。")
+            }
+            arguments += ["--effort", normalized]
+        }
+        return arguments
+    }
+
+    private static func requireSubscription(request: AgentRequest, environment: [String: String]) async throws {
+        let process = CLIProcess(
+            executable: request.executableURL,
+            arguments: ["--safe-mode", "--restricted", "auth", "status"],
+            directory: request.workingDirectory,
+            environment: environment
+        )
+        defer { process.terminate() }
+        try process.start()
+        process.finishInput()
+        var output = Data()
+        var exitCode: Int32?
+        for await event in process.events {
+            try Task.checkCancellation()
+            switch event {
+            case .stdoutLine(let line): output.append(contentsOf: (line + "\n").utf8)
+            case .stderrLine: break
+            case .exited(let code): exitCode = code
+            }
+        }
+        guard exitCode == 0, let object = try? JSONSerialization.jsonObject(with: output) as? [String: Any] else {
+            throw AgentError.authentication("Claude Code 尚未完成订阅登录。请先运行 claude auth login。")
+        }
+        let method = object["authMethod"] as? String
+        let provider = object["apiProvider"] as? String
+        let plan = (object["subscriptionType"] as? String)?.lowercased()
+        guard method == "claude.ai", provider == "firstParty", ["pro", "max", "team", "enterprise"].contains(plan ?? "") else {
+            throw AgentError.authentication("当前 Claude 认证不是可用的 Claude 订阅登录。")
+        }
+    }
+}
+
+public struct ClaudeJSONEvent: Equatable, Sendable {
+    public var sessionID: String?
+    public var textDelta: String?
+    public var finalText: String?
+    public var status: String?
+    public var isFailure: Bool
+    public var failureMessage: String?
+    public var actualModelIDs: [String]?
+    public var contextUsage: ContextUsage?
+    public var quota: ProviderQuota?
+}
+
+public enum ClaudeJSONEventParser {
+    public static func parse(_ object: [String: Any]) -> ClaudeJSONEvent {
+        let type = object["type"] as? String
+        var event = ClaudeJSONEvent(sessionID: object["session_id"] as? String, textDelta: nil, finalText: nil, status: nil, isFailure: false, failureMessage: nil)
+        if type == "assistant", let message = object["message"] as? [String: Any],
+           let model = message["model"] as? String, !model.isEmpty {
+            event.actualModelIDs = [model]
+        }
+        if type == "system", let subtype = object["subtype"] as? String, subtype == "init" {
+            event.status = "Claude 已连接。"
+        }
+        if type == "stream_event", let nested = object["event"] as? [String: Any], let nestedType = nested["type"] as? String {
+            if nestedType == "content_block_delta", let delta = nested["delta"] as? [String: Any], delta["type"] as? String == "text_delta" {
+                event.textDelta = delta["text"] as? String
+            }
+        }
+        if type == "result" {
+            if let usage = object["modelUsage"] as? [String: Any], !usage.isEmpty {
+                event.actualModelIDs = usage.keys.sorted()
+            }
+            // Context after this turn: everything the model read plus what it wrote.
+            if let usage = object["usage"] as? [String: Any] {
+                let used = ["input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens", "output_tokens"]
+                    .reduce(0) { $0 + ((usage[$1] as? NSNumber)?.intValue ?? 0) }
+                let windows = (object["modelUsage"] as? [String: Any])?.values
+                    .compactMap { (($0 as? [String: Any])?["contextWindow"] as? NSNumber)?.intValue }.filter { $0 > 0 } ?? []
+                if used > 0 { event.contextUsage = ContextUsage(usedTokens: used, windowTokens: windows.max()) }
+            }
+            event.finalText = object["result"] as? String
+            if let subtype = object["subtype"] as? String, subtype != "success" || object["is_error"] as? Bool == true {
+                event.isFailure = true
+                event.failureMessage = (object["result"] as? String) ?? "Claude Code 返回失败结果。"
+            }
+        }
+        if type == "rate_limit_event", let info = object["rate_limit_info"] as? [String: Any] {
+            event.quota = quota(from: info)
+        }
+        if type == "error" || (object["is_error"] as? Bool == true && type != "result") {
+            event.isFailure = true
+            event.failureMessage = (object["error"] as? String) ?? "Claude Code 返回错误。"
+        }
+        return event
+    }
+
+    /// Subscription windows from `rate_limit_event.rate_limit_info`.
+    /// `utilization` is a 0–1 fraction of the window.
+    static func quota(from info: [String: Any]) -> ProviderQuota {
+        let labels = ["five_hour": "5 小时", "seven_day": "每周", "seven_day_opus": "每周 · Opus", "seven_day_sonnet": "每周 · Sonnet",
+                      "seven_day_overage_included": "每周（含额外用量）", "overage": "额外用量"]
+        func date(_ v: Any?) -> Date? { (v as? NSNumber).map { Date(timeIntervalSince1970: $0.doubleValue) } }
+        var windows: [QuotaWindow] = []
+        if let unified = info["unifiedWindows"] as? [String: Any] {
+            for key in ["five_hour", "seven_day", "seven_day_overage_included"] {
+                guard let w = unified[key] as? [String: Any], let u = (w["utilization"] as? NSNumber)?.doubleValue else { continue }
+                windows.append(QuotaWindow(label: labels[key] ?? key, usedPercent: u * 100, resetsAt: date(w["resetsAt"])))
+            }
+        }
+        if windows.isEmpty, let u = (info["utilization"] as? NSNumber)?.doubleValue {
+            let type = info["rateLimitType"] as? String ?? ""
+            windows.append(QuotaWindow(label: labels[type] ?? "用量", usedPercent: u * 100, resetsAt: date(info["resetsAt"])))
+        }
+        return ProviderQuota(windows: windows, status: info["status"] as? String)
+    }
+}

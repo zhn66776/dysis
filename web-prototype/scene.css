@@ -1,0 +1,22 @@
+/* The room is rendered by scene.js; this file only owns the accessible overlay. */
+.scene-host > .office-scene { position: absolute; inset: 0; width: 100%; height: 100%; overflow: hidden; background: #c7aa82; }
+.scene-host canvas.office-canvas, .scene-host canvas { display: block; width: 100%; height: 100%; }
+.scene-host .office-canvas { position: absolute; inset: 0; touch-action: pan-y; cursor: pointer; }
+.world-labels { position: absolute; inset: 0; z-index: 4; pointer-events: none; }
+.world-label { position: absolute; display: flex; align-items: center; gap: 5px; min-width: 0; padding: 6px 8px; border: 1px solid rgba(47,65,53,.16); border-radius: 6px; color: #304b39; background: rgba(253,252,245,.92); box-shadow: 0 7px 18px rgba(36,54,40,.14); font: 10px/1.2 ui-monospace,SFMono-Regular,Menlo,monospace; white-space: nowrap; pointer-events: auto; opacity: .9; transition: opacity .2s ease, box-shadow .2s ease; backdrop-filter: blur(8px); }
+.world-label > i { display: inline-block; width: 5px; height: 5px; flex: 0 0 5px; margin: 0; border-radius: 50%; background: var(--agent-color,#7eab86); box-shadow: 0 0 0 3px color-mix(in srgb,var(--agent-color,#7eab86) 18%,transparent); }
+.world-label > span { color: #304b39; font: inherit; }.world-label > small { display: inline; padding-left: 4px; color: #91a095; font-size: 8px; opacity: .7; }
+.world-label:hover,.world-label:focus-visible,.world-label.is-selected { opacity: 1; box-shadow: 0 10px 24px rgba(36,54,40,.24); }.world-label.is-selected { border-color: #9cbca0; color: #355941; background: rgba(244,250,239,.97); }.world-label::after { content: ''; position: absolute; left: 50%; top: 100%; width: 1px; height: var(--leader-height,8px); background: rgba(50,69,56,.25); }
+.actor-label { min-width: 84px; flex-wrap: wrap; }.actor-label > small { flex-basis: 100%; margin: 1px 0 0 11px; padding-left: 0; font-size: 8px; }.zone-label { position: absolute; display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 7px; min-width: 116px; padding: 7px 9px; border: 1px solid rgba(55,74,60,.22); border-radius: 7px; color: #3e5c47; background: rgba(251,250,242,.88); box-shadow: 0 7px 19px rgba(38,57,42,.14); text-align: left; pointer-events: auto; backdrop-filter: blur(8px); }.zone-label strong { display: block; flex-basis: 100%; font-size: 10px; font-weight: 650; }.zone-label small { color: #91a195; font: 8px ui-monospace,monospace; letter-spacing: .35px; }.zone-label:hover,.zone-label:focus-visible { border-color: #aec4ae; background: rgba(244,249,239,.96); }.lounge-zone { --zone-color: #b89e65; }.owner-zone { --zone-color: #72977b; }.portfolio-zone { --zone-color: #8294a5; }
+.scene-vignette { position: absolute; z-index: 3; inset: 0; pointer-events: none; box-shadow: inset 0 0 85px rgba(29,43,37,.2); }
+.scene-error { position: absolute; inset: 0; display: grid; place-content: center; gap: 7px; color: #52665a; background: radial-gradient(circle at 50% 35%,#ede7d8,#cbb18c); text-align: center; }.scene-error strong { font-size: 16px; }.scene-error span { color: #7e8c80; font-size: 11px; }
+@media (max-width: 700px) { .world-label { padding: 5px 7px; font-size: 9px; }.world-label > small { display: none; } }
+
+/* Keep the figures visible; room names behave like quiet floor signs. */
+.actor-label { min-width: 0; padding: 4px 7px; gap: 5px; font-size: 9px; border-radius: 4px; box-shadow: 0 2px 7px #263d2b14; }
+.actor-label > small { display: none; }
+.zone-label { min-width: 0; padding: 4px 6px; border: 0; border-radius: 4px; background: rgba(251,250,242,.66); box-shadow: none; backdrop-filter: blur(3px); }
+.zone-label strong { font-size: 9px; letter-spacing: .3px; }
+.zone-label small { font-size: 6px; opacity: .7; }
+.portfolio-zone { padding: 5px 7px; }
+.portfolio-zone small { display: none; }

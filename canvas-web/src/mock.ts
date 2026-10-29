@@ -1,0 +1,134 @@
+// Browser-only stand-in for the Swift host, used by `npm run dev`.
+// Replies are canned local text, clearly labelled; nothing leaves the page.
+import type { BoardPayload, Command, ComposerInsert, MessagePayload, NodePayload, Provider, SessionSummary, StatePayload } from './types'
+
+interface MockSession { id: string; title: string; provider: Provider; modelID: string; started: boolean; messages: MessagePayload[] }
+
+const models: Record<Provider, string> = { claude: 'sonnet', codex: 'gpt-6.1-sol', grok: 'grok-4.7-medium', gemini: 'gemini-4-argon-medium' }
+const uid = () => crypto.randomUUID()
+
+export function createMockHost(emit: (p: StatePayload | ComposerInsert) => void) {
+  const sessions = new Map<string, MockSession>()
+  const boards: BoardPayload[] = []
+  let current = ''
+  let watched = new Set<string>()
+  const running = new Map<string, number>()
+  const efforts = new Map<string, string>()
+  const drafts = new Map<string, { id: string; name: string; kind: 'pdf'; bytes: number }[]>()
+
+  const addSession = (provider: Provider, title: string, messages: MessagePayload[] = []) => {
+    const s: MockSession = { id: uid(), title, provider, modelID: models[provider], started: messages.length > 0, messages }
+    sessions.set(s.id, s)
+    return s
+  }
+  const msg = (role: MessagePayload['role'], text: string): MessagePayload => ({ id: uid(), role, text, state: 'complete', createdAt: Date.now() })
+
+  const a = addSession('claude', '定价调研', [msg('user', 'Q4 新产品怎么定价？给我三个方向'), msg('assistant', '1. **订阅制**：月付，年付打八折。\n2. **按量计费**：按任务次数阶梯计价。\n3. **混合**：基础订阅加超额按量。\n\n（浏览器预览的示例内容）')])
+  const b = addSession('codex', '写定价说明')
+  const board: BoardPayload = { id: uid(), title: '示例画布', nodes: [], edges: [] }
+  const na: NodePayload = { id: uid(), sessionID: a.id, x: 80, y: 120, stale: false, downstream: 0 }
+  const nb: NodePayload = { id: uid(), sessionID: b.id, x: 420, y: 120, stale: false, downstream: 0 }
+  board.nodes.push(na, nb)
+  board.edges.push({ id: uid(), kind: 'data', source: na.id, target: nb.id, pending: true })
+  boards.push(board)
+  current = board.id
+
+  const summary = (s: MockSession): SessionSummary => {
+    const last = [...s.messages].reverse().find(m => m.role === 'assistant')
+    const state = running.has(s.id) ? 'running' : last ? (last.state === 'streaming' ? 'running' : last.state) : 'empty'
+    return { id: s.id, title: s.title, provider: s.provider, modelID: s.modelID, modelKey: s.modelID, effort: efforts.get(s.id), effortChoices: ['low', 'medium', 'high', 'xhigh', 'max'], remoteShort: s.started ? s.id.slice(0, 8) : undefined, state, preview: (last?.text ?? s.messages.at(-1)?.text ?? '').slice(0, 140), messageCount: s.messages.length, updatedAt: Date.now(), contextUsed: s.started ? 18_400 : undefined, contextWindow: s.started ? 200_000 : undefined }
+  }
+  const boardNow = () => boards.find(x => x.id === current)!
+  const push = (extra: Partial<StatePayload> = {}) => emit({
+    type: 'state', reset: true, running: [...running.keys()], error: '', chain: { total: 0, index: 0 },
+    boards: boards.map(x => ({ id: x.id, title: x.title, nodeCount: x.nodes.length })),
+    board: structuredClone(boardNow()),
+    summaries: [...sessions.values()].map(summary),
+    details: [...watched].filter(id => sessions.has(id)).map(id => ({ id, messages: structuredClone(sessions.get(id)!.messages) })),
+    models: {
+      claude: [{ id: 'claude-opus-5-5', key: 'claude-opus-5-5', label: 'Opus 5.5' }, { id: 'sonnet', key: 'sonnet', label: 'Sonnet · 跟随官方更新' }],
+      codex: [{ id: 'gpt-6.1-sol', key: 'gpt-6.1-sol', label: 'gpt-6.1-sol' }, { id: 'gpt-6-luna', key: 'gpt-6-luna', label: 'gpt-6-luna' }],
+    },
+    quotas: { claude: { windows: [{ label: '5 小时', usedPercent: 38, resetsAt: Date.now() + 2.5 * 3600e3 }, { label: '每周', usedPercent: 61 }], updatedAt: Date.now() } },
+    drafts: [...watched].map(id => ({ sessionID: id, files: drafts.get(id) ?? [], importing: false })),
+    ...extra,
+  })
+  const nodeOf = (boardID: string, nodeID: string) => boards.find(x => x.id === boardID)?.nodes.find(n => n.id === nodeID)
+
+  return (c: Command) => {
+    switch (c.type) {
+      case 'ready': case 'error.dismiss': break
+      case 'board.create': { const nb: BoardPayload = { id: uid(), title: '新画布', nodes: [], edges: [] }; boards.push(nb); current = nb.id; break }
+      case 'board.select': current = c.boardID; break
+      case 'board.rename': { const x = boards.find(y => y.id === c.boardID); if (x) x.title = c.title; break }
+      case 'board.delete': { if (boards.length > 1) { boards.splice(boards.findIndex(y => y.id === c.boardID), 1); current = boards[0].id } break }
+      case 'node.create': {
+        const s = addSession(c.provider, '新对话')
+        const n: NodePayload = { id: uid(), sessionID: s.id, x: c.x, y: c.y, stale: false, downstream: 0 }
+        const target = boards.find(y => y.id === c.boardID)!
+        target.nodes.push(n)
+        if (c.connectFrom) target.edges.push({ id: uid(), kind: 'data', source: c.connectFrom, target: n.id })
+        push({ focusNodeID: n.id }); return
+      }
+      case 'node.move': for (const p of c.positions) { const n = nodeOf(c.boardID, p.nodeID); if (n) { n.x = p.x; n.y = p.y } } break
+      case 'node.delete': { const x = boardNow(); x.nodes = x.nodes.filter(n => !c.nodeIDs.includes(n.id)); x.edges = x.edges.filter(e => !c.nodeIDs.includes(e.source) && !c.nodeIDs.includes(e.target)); break }
+      case 'node.rename': { const s = sessions.get(c.sessionID); if (s) s.title = c.title; break }
+      case 'node.branch': {
+        const parent = nodeOf(c.boardID, c.nodeID)!
+        const ps = sessions.get(parent.sessionID)!
+        const s = addSession(ps.provider, `分支 · ${ps.title}`)
+        let y = parent.y; while (boardNow().nodes.some(o => Math.abs(o.x - parent.x - 320) < 260 && Math.abs(o.y - y) < 150)) y += 40
+        const n: NodePayload = { id: uid(), sessionID: s.id, x: parent.x + 320, y, stale: false, downstream: 0, inherited: { fromNodeID: parent.id, messageCount: ps.messages.findIndex(m => m.id === c.messageID) + 1, mode: (ps.provider === 'claude' || ps.provider === 'codex') ? 'native' as const : 'replay' as const, reason: (ps.provider === 'claude' || ps.provider === 'codex') ? undefined : 'Cursor 不支持原生分叉' } }
+        const x = boardNow(); x.nodes.push(n); x.edges.push({ id: uid(), kind: 'inherit', source: parent.id, target: n.id })
+        push({ focusNodeID: n.id }); return
+      }
+      case 'edge.create': { const x = boardNow(); x.edges.push({ id: uid(), kind: 'data', source: c.source, target: c.target, pending: true }); break }
+      case 'edge.delete': { const x = boardNow(); x.edges = x.edges.filter(e => !c.edgeIDs.includes(e.id)); break }
+      case 'session.watch': watched = new Set(c.sessionIDs); break
+      case 'chat.send': {
+        const n = nodeOf(c.boardID, c.nodeID)!
+        const s = sessions.get(n.sessionID)!
+        if (s.title === '新对话' && s.messages.length === 0) s.title = c.text.slice(0, 32)
+        s.messages.push(msg('user', c.text))
+        const reply: MessagePayload = { ...msg('assistant', ''), state: 'streaming' }
+        s.messages.push(reply)
+        s.started = true
+        const words = '这是浏览器预览里的模拟回复，没有调用任何模型。真正的回复会从官方 CLI 流式返回，并以同样的方式逐段出现在这里。'.split('')
+        let i = 0
+        running.set(s.id, window.setInterval(() => {
+          reply.text += words.slice(i, i + 3).join(''); i += 3
+          if (i >= words.length) { reply.state = 'complete'; window.clearInterval(running.get(s.id)); running.delete(s.id) }
+          push()
+        }, 60))
+        break
+      }
+      case 'chat.stop': {
+        const t = running.get(c.sessionID); if (t) window.clearInterval(t); running.delete(c.sessionID)
+        const last = sessions.get(c.sessionID)?.messages.at(-1); if (last?.state === 'streaming') last.state = 'cancelled'
+        break
+      }
+      case 'viewport.save': { const x = boards.find(y => y.id === c.boardID); if (x) x.viewport = { x: c.x, y: c.y, zoom: c.zoom }; return }
+      case 'clipboard.copy': void navigator.clipboard?.writeText(c.text); return
+      case 'node.merge': {
+        const x = boardNow()
+        const sources = x.nodes.filter(n => c.nodeIDs.includes(n.id))
+        const titles = { compare: '对比', summarize: '汇总', critique: '挑错' } as const
+        const s = addSession(c.provider, `合流 · ${titles[c.template]}`)
+        const n: NodePayload = { id: uid(), sessionID: s.id, x: Math.max(...sources.map(o => o.x)) + 340, y: sources.reduce((t, o) => t + o.y, 0) / sources.length, stale: false, downstream: 0, merge: titles[c.template] }
+        x.nodes.push(n)
+        for (const o of sources) x.edges.push({ id: uid(), kind: 'data', source: o.id, target: n.id, pending: true })
+        push({ focusNodeID: n.id })
+        emit({ type: 'composer.insert', sessionID: s.id, text: `（${titles[c.template]}模板）对比以上 ${sources.length} 个方案……` })
+        return
+      }
+      case 'node.rerun': case 'chain.downstream': case 'chain.stop': break
+      case 'session.setModel': { const s = sessions.get(c.sessionID); if (s) s.modelID = c.modelID; break }
+      case 'session.setEffort': if (c.effort) efforts.set(c.sessionID, c.effort); else efforts.delete(c.sessionID); break
+      case 'provider.refresh': break
+      case 'attachment.choose': drafts.set(c.sessionID, [...(drafts.get(c.sessionID) ?? []), { id: uid(), name: '示例文档.pdf', kind: 'pdf', bytes: 248_000 }]); break
+      case 'attachment.remove': drafts.set(c.sessionID, (drafts.get(c.sessionID) ?? []).filter(f => f.id !== c.attachmentID)); break
+      case 'app.open': window.alert(`浏览器预览：这里会打开原生的「${c.window}」窗口。`); return
+    }
+    push()
+  }
+}
