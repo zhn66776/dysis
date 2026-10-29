@@ -49,7 +49,7 @@ struct ContentView: View {
                 onSettings: { showingSettings = true }
             )
             .frame(width: 270)
-            Hairline(vertical: true)
+            Hairline(vertical: true).ignoresSafeArea(edges: .top)
             Group {
                 if let id = selectedPlazaID {
                     PlazaDetail(model: plaza, appModel: model, attachments: attachments, roomID: id, draft: Binding(get: { draftByPlaza[id, default: ""] }, set: { draftByPlaza[id] = $0 })).id(id)
@@ -246,7 +246,7 @@ private struct SessionSidebar: View {
             }
             .padding(12)
         }
-        .background(Theme.side)
+        .background(Theme.side.ignoresSafeArea())
         .sheet(item: $pendingDelete) { session in
             ThemedDialog(title: "删除这个会话？",
                          detail: "只移除 AgentDesk 的会话记录，不会删除官方 CLI 的 Session 或工作目录文件。",
@@ -414,7 +414,7 @@ private struct ChatHeader: View {
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 12)
-        .background(Theme.panel)
+        .background(Theme.panel.ignoresSafeArea(edges: .top))
     }
 }
 

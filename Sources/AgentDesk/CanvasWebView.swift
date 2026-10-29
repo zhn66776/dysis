@@ -94,6 +94,35 @@ final class CanvasWKWebView: WKWebView {
         fileURLs(sender).isEmpty ? super.draggingUpdated(sender) : (bridge?.panelSessionID == nil ? [] : .copy)
     }
 
+    /// The page's top strip acts as the title bar: drag to move the window,
+    /// double-click for the system title-bar action. Controls in it still click.
+    override func mouseDown(with event: NSEvent) {
+        let local = convert(event.locationInWindow, from: nil)
+        let point = CGPoint(x: local.x, y: isFlipped ? local.y : bounds.height - local.y)
+        guard let window, bridge?.isWindowDragPoint(point) == true else { return super.mouseDown(with: event) }
+        if event.clickCount == 2 {
+            switch UserDefaults.standard.string(forKey: "AppleActionOnDoubleClick") {
+            case "Minimize": window.miniaturize(nil)
+            case "None": break
+            default: window.zoom(nil)
+            }
+        } else {
+            window.performDrag(with: event)
+        }
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        NotificationCenter.default.removeObserver(self)
+        guard let window else { return }
+        for name in [NSWindow.didEnterFullScreenNotification, NSWindow.didExitFullScreenNotification] {
+            NotificationCenter.default.addObserver(self, selector: #selector(chromeChanged), name: name, object: window)
+        }
+        bridge?.pushChrome()
+    }
+
+    @objc private func chromeChanged() { bridge?.pushChrome() }
+
     override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
         let urls = fileURLs(sender)
         guard !urls.isEmpty else { return super.performDragOperation(sender) }
@@ -115,6 +144,11 @@ struct CanvasWebView: NSViewRepresentable {
         let web = CanvasWKWebView(frame: .zero, configuration: config)
         web.bridge = bridge
         web.setValue(false, forKey: "drawsBackground")
+        // The window's title bar is transparent and the page draws its own top
+        // strip; stop WebKit from pushing the page below the title bar.
+        if web.responds(to: NSSelectorFromString("_setAutomaticallyAdjustsContentInsets:")) {
+            web.setValue(false, forKey: "automaticallyAdjustsContentInsets")
+        }
         web.allowsBackForwardNavigationGestures = false
         web.allowsMagnification = false
 #if DEBUG
@@ -177,6 +211,7 @@ struct CanvasRootView: View {
 
     var body: some View {
         CanvasWebView(bridge: bridge)
+            .ignoresSafeArea()
             .onAppear {
                 bridge.openWindow = { window, sessionID in
                     switch window {

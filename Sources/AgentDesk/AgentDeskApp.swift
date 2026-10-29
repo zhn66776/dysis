@@ -22,15 +22,19 @@ struct AgentDeskApp: App {
         WindowGroup {
             CanvasRootView(model: model, canvas: canvas)
                 .frame(minWidth: 900, minHeight: 620)
+                .transparentTitleBar()
                 .onAppear { delegate.model = model }
         }
+        .windowStyle(.hiddenTitleBar)
         .defaultSize(width: 1280, height: 820)
         // The previous SwiftUI interface: Plaza, attachments, dictation and
         // export live here until they move onto the canvas.
         Window("经典界面", id: "classic") {
             ContentView(model: model)
                 .frame(minWidth: 900, minHeight: 620)
+                .transparentTitleBar()
         }
+        .windowStyle(.hiddenTitleBar)
         .defaultSize(width: 1120, height: 760)
         .commands {
             CommandGroup(after: .appSettings) {
@@ -47,7 +51,7 @@ struct AgentDeskApp: App {
                 }
             }
         }
-        Settings { SettingsView(model: model).frame(width: 720, height: 650) }
+        Settings { SettingsView(model: model).frame(width: 720, height: 650).transparentTitleBar() }
     }
 }
 

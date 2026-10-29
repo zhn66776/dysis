@@ -87,6 +87,7 @@ struct BridgeState: Encodable {
 
 struct BridgeCommand: Decodable {
     struct Position: Decodable { let nodeID: UUID; let x: Double; let y: Double }
+    struct Rect: Decodable { let x: Double; let y: Double; let w: Double; let h: Double }
     let type: String
     var boardID: UUID?, nodeID: UUID?, sessionID: UUID?, messageID: UUID?
     var source: UUID?, target: UUID?, connectFrom: UUID?
@@ -98,6 +99,8 @@ struct BridgeCommand: Decodable {
     var modelID: String?, effort: String?, attachmentID: UUID?, template: String?
     /// `confirm.answer`: the dialog ID Swift issued and whether the user clicked the action.
     var id: UUID?, ok: Bool?
+    /// `chrome.regions`: page areas (CSS px from the top-left) that move the window, and controls inside them that do not.
+    var drag: [Rect]?, noDrag: [Rect]?
 }
 
 enum BridgeEncoding {
@@ -199,6 +202,8 @@ final class CanvasBridge: NSObject, ObservableObject, WKScriptMessageHandler {
     private var sentDrafts: [UUID: BridgeDraft] = [:]
     /// Open confirmations; each runs at most once, and only on `confirm.answer` with ok.
     private var pendingConfirms: [UUID: () -> Void] = [:]
+    /// Where a mouse-down moves the window, as the page last reported it.
+    private var dragRects: [CGRect] = [], noDragRects: [CGRect] = []
     /// The session whose panel is open (first watched ID); file drops go here.
     private(set) var panelSessionID: UUID?
     private var observers: Set<AnyCancellable> = []
@@ -242,6 +247,12 @@ final class CanvasBridge: NSObject, ObservableObject, WKScriptMessageHandler {
             // A reloaded page no longer shows earlier dialogs; treat them as declined.
             pendingConfirms = [:]
             push(reset: true)
+            pushChrome()
+            return
+        case "chrome.regions":
+            let rect = { (r: BridgeCommand.Rect) in CGRect(x: r.x, y: r.y, width: r.w, height: r.h) }
+            dragRects = (c.drag ?? []).prefix(32).map(rect)
+            noDragRects = (c.noDrag ?? []).prefix(64).map(rect)
             return
         case "confirm.answer":
             guard let id = c.id, let perform = pendingConfirms.removeValue(forKey: id) else { return }
@@ -365,6 +376,24 @@ final class CanvasBridge: NSObject, ObservableObject, WKScriptMessageHandler {
         let id = UUID()
         pendingConfirms[id] = perform
         evaluate(["type": "confirm.show", "id": id.uuidString, "title": title, "detail": detail, "action": action])
+    }
+
+    // MARK: Window chrome
+
+    /// The title bar is transparent and the page runs under it; tell the page
+    /// how tall it is and where the traffic lights end so it can keep clear.
+    func pushChrome() {
+        guard ready, let window = webView?.window else { return }
+        let fullScreen = window.styleMask.contains(.fullScreen)
+        let top = fullScreen ? 0 : max(0, window.frame.height - window.contentLayoutRect.height)
+        let left = fullScreen ? 0 : (window.standardWindowButton(.zoomButton)?.frame.maxX ?? 0)
+        evaluate(["type": "chrome", "top": top, "left": left])
+    }
+
+    /// True when a mouse-down at this page point (CSS px from the top-left)
+    /// should move the window, as a title bar would.
+    func isWindowDragPoint(_ point: CGPoint) -> Bool {
+        dragRects.contains { $0.contains(point) } && !noDragRects.contains { $0.contains(point) }
     }
 
     // MARK: Pushing state

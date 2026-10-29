@@ -107,7 +107,12 @@ export interface ComposerInsert { type: 'composer.insert'; sessionID: string; te
 /** Swift asks for an explicit yes before a destructive or call-spending action. */
 export interface ConfirmShow { type: 'confirm.show'; id: string; title: string; detail: string; action: string }
 
-export type Incoming = StatePayload | ComposerInsert | ConfirmShow
+/** Height of the transparent title bar and where the traffic lights end, in CSS px (0 in full screen). */
+export interface ChromeInsets { type: 'chrome'; top: number; left: number }
+
+export interface Region { x: number; y: number; w: number; h: number }
+
+export type Incoming = StatePayload | ComposerInsert | ConfirmShow | ChromeInsets
 
 export type Command =
   | { type: 'ready' }
@@ -139,6 +144,7 @@ export type Command =
   | { type: 'chain.downstream'; boardID: string; nodeID: string }
   | { type: 'chain.stop' }
   | { type: 'confirm.answer'; id: string; ok: boolean }
+  | { type: 'chrome.regions'; drag: Region[]; noDrag: Region[] }
 
 export interface AppState {
   ready: boolean

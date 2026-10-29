@@ -4,6 +4,7 @@ import { isNative, send, subscribe } from './bridge'
 import { Canvas } from './Canvas'
 import { ChatPanel } from './ChatPanel'
 import { ConfirmDialog } from './ConfirmDialog'
+import { applyChrome } from './chrome'
 import { Sidebar } from './Sidebar'
 import { applyState, enqueueConfirm, initialState, resolveConfirm } from './store'
 import type { AppState, ConfirmShow, StatePayload } from './types'
@@ -20,6 +21,7 @@ export function App() {
       if (p.type === 'state') dispatch(p)
       else if (p.type === 'composer.insert') setDrafts(d => ({ ...d, [p.sessionID]: (d[p.sessionID] ? d[p.sessionID] + '\n\n' : '') + p.text }))
       else if (p.type === 'confirm.show') setConfirms(q => enqueueConfirm(q, p))
+      else if (p.type === 'chrome') applyChrome(p)
     })
     send({ type: 'ready' })
     return off
@@ -57,7 +59,7 @@ export function App() {
   if (!state.ready) return <div className="loading">正在载入…</div>
 
   return (
-    <div className={`app${node ? ' with-panel' : ''}`}>
+    <div className={`app${node ? ' with-panel' : ''}${collapsed || node ? ' rail-shown' : ''}`}>
       <Sidebar state={state} collapsed={collapsed || Boolean(node)} onToggle={() => { setCollapsed(c => !c); if (node) setSelectedNodeID(null) }} />
       <main className="main">
         {state.error && (
