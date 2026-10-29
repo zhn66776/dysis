@@ -130,6 +130,14 @@ final class NativeForkTests: XCTestCase {
         XCTAssertEqual(events.last, .completed)
     }
 
+    func testClaudeReportsTheSessionIDOnceAlthoughEveryLineCarriesIt() async throws {
+        let ok = try claudeFixture(mode: "ok")
+        let (events, error) = await collect(ClaudeBackend().stream(request(remote: nil, fork: nil, executable: ok)))
+        XCTAssertNil(error)
+        XCTAssertEqual(events.compactMap { if case .sessionID(let id) = $0 { return id }; return nil }, ["forked-id"])
+        XCTAssertEqual(events.last, .completed)
+    }
+
     func testFailedClaudeForkKeepsNoSessionID() async throws {
         let fail = try claudeFixture(mode: "missing")
         let (events, error) = await collect(ClaudeBackend().stream(request(remote: nil, fork: AgentFork(remoteSessionID: "gone"), executable: fail)))

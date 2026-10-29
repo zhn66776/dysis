@@ -67,6 +67,9 @@ public struct ClaudeBackend: AgentBackend, Sendable {
                     // result. A failed resume still prints a fresh, empty session
                     // ID, and keeping it would detach the node from its history.
                     var forkedSessionID: String?
+                    // Every stream line carries `session_id`; report it once,
+                    // since the app persists the session on each report.
+                    var reportedSessionID: String?
                     var replyModels = Set<String>()
                     var exitCode: Int32?
 
@@ -88,7 +91,8 @@ public struct ClaudeBackend: AgentBackend, Sendable {
                                         throw AgentError.protocolFailure("Claude Code 没有创建新的分叉会话，已停止，避免改动父节点的会话。")
                                     }
                                     forkedSessionID = sessionID
-                                } else {
+                                } else if sessionID != reportedSessionID {
+                                    reportedSessionID = sessionID
                                     continuation.yield(.sessionID(sessionID))
                                 }
                             }
