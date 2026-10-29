@@ -1,6 +1,0 @@
-{
-  "version": "0.0.1",
-  "configurations": [
-    { "name": "canvas-web", "runtimeExecutable": "npm", "runtimeArgs": ["--prefix", "canvas-web", "run", "dev"], "port": 5174 }
-  ]
-}

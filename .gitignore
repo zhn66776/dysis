@@ -4,3 +4,8 @@ build/
 .DS_Store
 canvas-web/node_modules/
 canvas-web/dist/
+# Agent instructions and local agent tooling
+AGENTS.md
+CLAUDE.md
+CLAUDE.local.md
+.claude/
