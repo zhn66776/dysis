@@ -50,6 +50,13 @@ final class LiveMCPToolTests: XCTestCase {
                       prompt: "First read notes.txt in the workspace. Then use the livecheck MCP server's get_code tool and reply with the code it returns.")
     }
 
+    /// A question that does not name the server, as a user would ask it.
+    func testCursorUnnamedServer() async throws {
+        let url = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".local/bin/agent")
+        try await run(CursorBackend(), executable: url, model: environment["AGENTDESK_LIVE_CURSOR_MODEL"] ?? "grok-4.7-medium",
+                      prompt: "今天的验证码是多少？")
+    }
+
     private func run(_ backend: AgentBackend, executable: URL, model: String,
                      prompt: String = "Use the livecheck MCP server's get_code tool, then reply with only the code it returns.") async throws {
         try XCTSkipUnless(FileManager.default.isExecutableFile(atPath: executable.path), "\(executable.lastPathComponent) is not installed.")
