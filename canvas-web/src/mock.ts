@@ -1,7 +1,7 @@
 // Browser-only stand-in for the Swift host, used by `npm run dev`.
 // Replies are canned local text, clearly labelled; nothing leaves the page.
 import { searchExcerpt } from './interactions'
-import type { Incoming, BoardPayload, Command, MessagePayload, NodePayload, Provider, SessionSummary, StatePayload } from './types'
+import type { Incoming, BoardPayload, Command, MessagePayload, NodePayload, Provider, SessionSummary, SourceFile, SourcePayload, StatePayload } from './types'
 
 interface MockSession { id: string; title: string; provider: Provider; modelID: string; started: boolean; messages: MessagePayload[] }
 
@@ -32,13 +32,37 @@ export function createMockHost(emit: (p: Incoming) => void) {
 
   const a = addSession('claude', '定价调研', [msg('user', 'Q4 新产品怎么定价？给我三个方向'), msg('assistant', '1. **订阅制**：月付，年付打八折。\n2. **按量计费**：按任务次数阶梯计价。\n3. **混合**：基础订阅加超额按量。\n\n（浏览器预览的示例内容）')])
   const b = addSession('codex', '写定价说明')
+  const c = addSession('grok', 'Grok 竞品速览')
   const board: BoardPayload = { id: uid(), title: '示例画布', nodes: [], edges: [] }
   const na: NodePayload = { id: uid(), sessionID: a.id, x: 80, y: 120, stale: false, downstream: 0 }
-  const nb: NodePayload = { id: uid(), sessionID: b.id, x: 420, y: 120, stale: false, downstream: 0 }
-  board.nodes.push(na, nb)
+  const nb: NodePayload = { id: uid(), sessionID: b.id, x: 440, y: 120, stale: false, downstream: 0 }
+  const nc: NodePayload = { id: uid(), sessionID: c.id, x: 440, y: 340, stale: false, downstream: 0 }
+  board.nodes.push(na, nb, nc)
   board.edges.push({ id: uid(), kind: 'data', source: na.id, target: nb.id, pending: true })
+
+  // Source nodes: read-only files and an MCP result, fed into two conversations.
+  const file = (name: string, kind: SourceFile['kind'], bytes: number, note?: string): SourceFile => ({ id: uid(), name, kind, bytes, note })
+  const filesTitle = (files: SourceFile[]) => files.length === 0 ? '文件' : files.length === 1 ? files[0].name : `${files[0].name} 等 ${files.length} 个文件`
+  const customTitles = new Map<string, string>()
+  const sourceNode = (source: SourcePayload, x: number, y: number): NodePayload => { const id = uid(); return { id, sessionID: id, x, y, stale: false, downstream: 0, source } }
+  const sampleFiles = [file('需求说明.md', 'text', 18_400), file('竞品价格表.pdf', 'pdf', 412_000, '仅提取前 100 页，共 120 页。'), file('定价草图.png', 'image', 1_240_000)]
+  const nf = sourceNode({ kind: 'files', title: filesTitle(sampleFiles), updatedAt: Date.now() - 3600e3, importing: false, files: sampleFiles }, 80, 330)
+  const nm = sourceNode({
+    kind: 'mcp', title: 'query_prices', updatedAt: Date.now() - 600e3, importing: false, files: [],
+    mcp: { serverName: '本地价格库（示例）', toolName: 'query_prices', arguments: '{\n  "region": "CN",\n  "quarter": "Q3"\n}', text: '{\n  "rows": [\n    { "plan": "基础版", "price": 49 },\n    { "plan": "专业版", "price": 199 }\n  ]\n}', isError: false, calledAt: Date.now() - 600e3 },
+  }, 80, 520)
+  board.nodes.push(nf, nm)
+  for (const [from, to] of [[nf, nb], [nm, nb], [nf, nc]]) board.edges.push({ id: uid(), kind: 'data', source: from.id, target: to.id, pending: true })
   boards.push(board)
   current = board.id
+
+  /** New content: every edge out of the node is pending again, like a new version. */
+  const touch = (n: NodePayload) => {
+    const src = n.source!
+    if (src.kind === 'files') src.title = customTitles.get(n.id) ?? filesTitle(src.files)
+    src.updatedAt = Date.now()
+    for (const e of boardNow().edges) if (e.source === n.id) e.pending = true
+  }
 
   const summary = (s: MockSession): SessionSummary => {
     const last = [...s.messages].reverse().find(m => m.role === 'assistant')
@@ -88,7 +112,7 @@ export function createMockHost(emit: (p: Incoming) => void) {
       case 'node.move': for (const p of c.positions) { const n = nodeOf(c.boardID, p.nodeID); if (n) { n.x = p.x; n.y = p.y } } break
       case 'node.delete': {
         const x = boardNow()
-        const titles = x.nodes.filter(n => c.nodeIDs.includes(n.id)).map(n => sessions.get(n.sessionID)?.title ?? '')
+        const titles = x.nodes.filter(n => c.nodeIDs.includes(n.id)).map(n => n.source?.title ?? sessions.get(n.sessionID)?.title ?? '')
         confirm(`删除${titles.length === 1 ? `「${titles[0]}」` : `${c.nodeIDs.length} 个节点`}？`, '只删除本地记录和画布上的节点，官方 CLI 中的历史和工作目录文件不受影响。', '删除', () => {
           x.nodes = x.nodes.filter(n => !c.nodeIDs.includes(n.id)); x.edges = x.edges.filter(e => !c.nodeIDs.includes(e.source) && !c.nodeIDs.includes(e.target))
         })
@@ -123,6 +147,7 @@ export function createMockHost(emit: (p: Incoming) => void) {
         const node = target.nodes.find(n => n.id === c.nodeID)!
         const inputs = target.edges.filter(e => e.kind === 'data' && e.target === node.id && e.pending).map(e => {
           const source = target.nodes.find(n => n.id === e.source)!
+          if (source.source) return `--- 资料节点「${source.source.title}」---\n` + (source.source.kind === 'mcp' ? source.source.mcp?.text ?? '' : source.source.files.map(f => `【${f.name}】`).join('\n'))
           const s = sessions.get(source.sessionID)!
           const reply = e.sourceMessageID ? s.messages.find(m => m.id === e.sourceMessageID) : [...s.messages].reverse().find(m => m.role === 'assistant' && m.state === 'complete')
           return reply ? `--- 来自「${s.title}」---\n${reply.text}` : ''
@@ -141,13 +166,17 @@ export function createMockHost(emit: (p: Incoming) => void) {
         x.nodes.push(n); x.edges.push({ id: uid(), kind: 'data', source: parent.id, target: n.id, sourceMessageID: c.messageID, pending: true })
         push({ focusNodeID: n.id }); return
       }
-      case 'edge.create': { const x = boardNow(); x.edges.push({ id: uid(), kind: 'data', source: c.source, target: c.target, pending: true }); break }
+      case 'edge.create': {
+        const x = boardNow()
+        if (x.nodes.find(n => n.id === c.target)?.source) { push({ error: '文件和 MCP 结果节点只能作为数据线的起点。' }); return }
+        x.edges.push({ id: uid(), kind: 'data', source: c.source, target: c.target, pending: true }); break }
       case 'edge.delete': { const x = boardNow(); x.edges = x.edges.filter(e => !c.edgeIDs.includes(e.id)); break }
       case 'session.watch': watched = new Set(c.sessionIDs); break
       case 'chat.send': {
         const n = nodeOf(c.boardID, c.nodeID)!
         const s = sessions.get(n.sessionID)!
         if (s.title === '新对话' && s.messages.length === 0) s.title = c.text.slice(0, 32)
+        for (const e of boardNow().edges) if (e.target === n.id) e.pending = false
         s.messages.push(msg('user', c.text))
         const reply: MessagePayload = { ...msg('assistant', ''), state: 'streaming' }
         s.messages.push(reply)
@@ -186,6 +215,28 @@ export function createMockHost(emit: (p: Incoming) => void) {
       case 'provider.refresh': break
       case 'attachment.choose': drafts.set(c.sessionID, [...(drafts.get(c.sessionID) ?? []), { id: uid(), name: '示例文档.pdf', kind: 'pdf', bytes: 248_000 }]); break
       case 'attachment.remove': drafts.set(c.sessionID, (drafts.get(c.sessionID) ?? []).filter(f => f.id !== c.attachmentID)); break
+      case 'source.createFiles': {
+        const files = [file('示例文件.pdf', 'pdf', 248_000)]
+        const n = sourceNode({ kind: 'files', title: filesTitle(files), updatedAt: Date.now(), importing: false, files }, c.x, c.y)
+        boards.find(y => y.id === c.boardID)!.nodes.push(n)
+        push({ focusNodeID: n.id }); return
+      }
+      case 'source.addFiles': { const n = nodeOf(c.boardID, c.nodeID); if (n?.source) { n.source.files.push(file('补充数据.csv', 'text', 9_800)); touch(n) } break }
+      case 'source.removeFile': { const n = nodeOf(c.boardID, c.nodeID); if (n?.source) { n.source.files = n.source.files.filter(f => f.id !== c.attachmentID); touch(n) } break }
+      case 'source.rename': {
+        const n = nodeOf(c.boardID, c.nodeID)
+        if (!n?.source) break
+        if (c.title) customTitles.set(n.id, c.title); else customTitles.delete(n.id)
+        n.source.title = c.title || (n.source.kind === 'mcp' ? (n.source.mcp?.toolName ?? 'MCP 结果') : filesTitle(n.source.files))
+        break
+      }
+      case 'source.rerunMCP': {
+        // Stand-in for running the tool again in the native workbench.
+        const n = nodeOf(c.boardID, c.nodeID)
+        if (!n?.source?.mcp || !window.confirm('浏览器预览：这里会打开原生 MCP 工作台并填好参数。模拟一次重新运行？')) return
+        n.source.mcp = { ...n.source.mcp, text: n.source.mcp.text.replace('199', '219'), calledAt: Date.now() }
+        touch(n); break
+      }
       case 'app.open': window.alert(`浏览器预览：这里会打开原生的「${c.window}」窗口。`); return
     }
     push()
