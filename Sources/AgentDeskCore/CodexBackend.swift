@@ -454,7 +454,8 @@ public final class CodexBackend: AgentBackend, @unchecked Sendable {
     static func baseInstructions(mcpServers: [AgentMCPServer]) -> String {
         guard !mcpServers.isEmpty else { return "Use no tools in this session. Answer with text only." }
         let names = mcpServers.map(\.name).joined(separator: ", ")
-        return "The only tools in this session are those of the MCP servers \(names), which the user opened to you. Call them whenever they help answer; do not try any other tool. Otherwise answer with text."
+        let files = mcpServers.contains { $0.name.hasSuffix(FolderAccessPolicy.serverName) } ? " " + FolderAccessPolicy.modelNote : ""
+        return "The only tools in this session are those of the MCP servers \(names), which the user opened to you. Call them whenever they help answer; do not try any other tool. Otherwise answer with text." + files
     }
 
     /// The user's own Codex MCP servers stay disabled; ours get a name that
@@ -516,7 +517,8 @@ public final class CodexBackend: AgentBackend, @unchecked Sendable {
             case .streamableHTTP(let url):
                 args += ["-c", "\(key).url=\(try tomlValue(url))"]
             }
-            args += ["-c", "\(key).enabled=true"]
+            // A files call can wait for the user's answer (FolderAccessServer.timeout).
+            args += ["-c", "\(key).tool_timeout_sec=\(FolderAccessPolicy.toolTimeoutSeconds)", "-c", "\(key).enabled=true"]
         }
         return args
     }

@@ -21,9 +21,12 @@ npm --prefix "$project_root/canvas-web" run build
 # Only this generated app bundle is replaced; Application Support is retained.
 /bin/rm -rf -- "$bundle"
 /usr/bin/swift build -c release --product AgentDesk
+/usr/bin/swift build -c release --product agentdesk-files
 binary_dir="$(/usr/bin/swift build -c release --show-bin-path)"
 mkdir -p "$bundle/Contents/MacOS" "$bundle/Contents/Resources"
 cp "$binary_dir/AgentDesk" "$bundle/Contents/MacOS/AgentDesk"
+# AgentDesk's files MCP server; the CLIs start it for folder reads.
+cp "$binary_dir/agentdesk-files" "$bundle/Contents/MacOS/agentdesk-files"
 cp "$project_root/Resources/Info.plist" "$bundle/Contents/Info.plist"
 mkdir -p "$bundle/Contents/Resources/ProviderIcons"
 cp "$project_root/Resources/ProviderIcons/"*.svg "$bundle/Contents/Resources/ProviderIcons/"

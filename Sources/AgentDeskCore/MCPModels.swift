@@ -139,8 +139,9 @@ public struct AgentMCPServer: Equatable, Sendable {
 
     /// Enabled servers the user opened to the model, with unique, safe names.
     /// Servers without a command or URL are skipped.
+    /// `agentdesk_files` stays free for AgentDesk's own files server.
     public static func forModel(_ configurations: [MCPServerConfiguration], processEnvironment: [String: String] = ProcessInfo.processInfo.environment) -> [AgentMCPServer] {
-        var used = Set<String>()
+        var used: Set<String> = [FolderAccessPolicy.serverName]
         return configurations.compactMap { config in
             guard config.enabled, config.modelAccess else { return nil }
             switch config.transport {

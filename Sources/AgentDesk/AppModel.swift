@@ -28,6 +28,7 @@ final class AppModel: ObservableObject {
     private var lastStreamSave: [UUID: Date] = [:]
     let plaza: PlazaModel
     let attachmentDrafts: AttachmentDrafts
+    let folderAccess: FolderAccessCenter
     var dataRoot: URL { plaza.root }
 
     var selectedSession: ChatSession? { sessions.first { $0.id == selectedSessionID } }
@@ -36,6 +37,7 @@ final class AppModel: ObservableObject {
         let resolvedRoot = root ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("AgentDesk", isDirectory: true)
         plaza = PlazaModel(root: resolvedRoot)
         attachmentDrafts = AttachmentDrafts(root: resolvedRoot)
+        folderAccess = FolderAccessCenter(root: resolvedRoot)
         configuration = Self.defaults()
         do {
             let store = try LocalStore(root: root)
@@ -52,6 +54,9 @@ final class AppModel: ObservableObject {
         } catch {
             storageReadable = false
             errorMessage = "无法读取本地记录，原文件已保留。\(error.localizedDescription)"
+        }
+        folderAccess.describe = { [weak self] id in
+            self?.sessions.first { $0.id == id }.map { ($0.title, $0.provider) }
         }
     }
 
@@ -130,6 +135,7 @@ final class AppModel: ObservableObject {
     func deleteSession(_ id: UUID) {
         stop(sessionID: id)
         sessions.removeAll { $0.id == id }
+        folderAccess.forget(session: id)
         if selectedSessionID == id { selectedSessionID = sessions.first?.id }
         persist()
     }
@@ -142,10 +148,13 @@ final class AppModel: ObservableObject {
 
     /// MCP servers the user opened to the model (MCP 工具 → 让模型自己调用),
     /// read on every send so a change applies to the next message.
-    private func modelMCPServers() -> [AgentMCPServer] {
+    /// AgentDesk's files server joins them when folder access is on.
+    private func modelMCPServers(sessionID: UUID) -> [AgentMCPServer] {
         let url = dataRoot.appendingPathComponent("mcp-servers.json")
-        guard let data = try? Data(contentsOf: url), let configs = try? JSONDecoder().decode([MCPServerConfiguration].self, from: data) else { return [] }
-        return AgentMCPServer.forModel(configs)
+        let configs = (try? Data(contentsOf: url)).flatMap { try? JSONDecoder().decode([MCPServerConfiguration].self, from: $0) } ?? []
+        var servers = AgentMCPServer.forModel(configs)
+        if configuration.folderAccess, let files = folderAccess.server(for: sessionID, dataRoot: dataRoot) { servers.append(files) }
+        return servers
     }
 
     func send(_ text: String) {
@@ -203,7 +212,7 @@ final class AppModel: ObservableObject {
         sessions[index].messages.append(ChatMessage(id: assistantID, role: .assistant, text: "", state: .streaming))
         sessions[index].updatedAt = Date()
         let session = sessions[index]
-        let request = AgentRequest(localSessionID: id, remoteSessionID: session.remoteSessionID, prompt: input, workingDirectory: URL(fileURLWithPath: session.workingDirectory), modelID: session.modelID, executableURL: executable, reasoningEffort: session.reasoningEffort, images: images, forkFrom: session.remoteSessionID == nil ? context.fork : nil, mcpServers: modelMCPServers())
+        let request = AgentRequest(localSessionID: id, remoteSessionID: session.remoteSessionID, prompt: input, workingDirectory: URL(fileURLWithPath: session.workingDirectory), modelID: session.modelID, executableURL: executable, reasoningEffort: session.reasoningEffort, images: images, forkFrom: session.remoteSessionID == nil ? context.fork : nil, mcpServers: modelMCPServers(sessionID: id))
         let backend: any AgentBackend
         switch provider {
         case .claude: backend = ClaudeBackend()
