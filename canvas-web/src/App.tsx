@@ -56,9 +56,9 @@ export function App() {
   }, [node])
 
   const confirm = confirms[0]
-  const answer = useCallback((ok: boolean) => {
+  const answer = useCallback((ok: boolean, checked?: boolean) => {
     if (!confirm) return
-    send({ type: 'confirm.answer', id: confirm.id, ok })
+    send({ type: 'confirm.answer', id: confirm.id, ok, checked })
     setConfirms(q => resolveConfirm(q, confirm.id))
   }, [confirm])
 
@@ -72,6 +72,12 @@ export function App() {
           <div className="error-banner" role="alert">
             <span>{state.error}</span>
             <button className="icon-btn" aria-label="关闭提示" onClick={() => send({ type: 'error.dismiss' })}>✕</button>
+          </div>
+        )}
+        {state.notice && !state.error && (
+          <div className="notice-banner" role="status">
+            <span>{state.notice}</span>
+            <button className="icon-btn" aria-label="关闭提示" onClick={() => send({ type: 'notice.dismiss' })}>✕</button>
           </div>
         )}
         {!isNative && <div className="preview-badge">浏览器预览 · 模拟数据，不调用模型</div>}

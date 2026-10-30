@@ -7,6 +7,8 @@ import type { SessionSummary, MessagePayload } from './types'
 export type ChatNodeData = {
   summary?: SessionSummary; inherited: boolean; nativeFork?: boolean
   merge?: string; stale?: boolean; downstream?: number; chainCurrent?: boolean; picked?: boolean
+  /** The node's worktree branch, shown in the footer. */
+  branch?: string
   expanded?: boolean; reading?: MessagePayload
   onExpand?(): void; onFollowUp?(): void; onBranch?(): void; onQuote?(): void
   onDownstream?(): void
@@ -47,6 +49,7 @@ function ChatNodeView({ data, selected }: NodeProps<ChatFlowNode>) {
       </div>
       <div className="node-foot">
         <span className="meta">{s.modelID || '默认模型'}</span>
+        {data.branch && <span className="meta branch" title={`worktree 分支 ${data.branch}`}>⎇ {data.branch.split('/').pop()}</span>}
         {data.stale && s.state !== 'running'
           ? <span className="status status-stale" title="上游有新的输出，这个回答可能已经过期">● 上游已更新</span>
           : <span className={`status status-${s.state}`}>{s.state === 'running' && s.status ? s.status : stateLabel[s.state]}</span>}

@@ -6,6 +6,8 @@ import AppKit
 
 struct SettingsView: View {
     @ObservedObject var model: AppModel
+    /// Set in the canvas app: worktree disk use and cleanup.
+    var canvas: CanvasModel? = nil
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
@@ -34,6 +36,7 @@ struct SettingsView: View {
                         ProviderSettingsSection(model: model, provider: provider)
                     }
                     FolderAccessSettings(model: model, center: model.folderAccess)
+                    if let canvas { WorktreeSettings(canvas: canvas) }
                     if model.developerModeEnabled { SecurityNote() }
                     HStack {
                         Text(model.developerModeEnabled ? "⌘⇧D Leave developer mode" : "⌘⇧D Developer mode")
@@ -307,5 +310,50 @@ private struct SecurityNote: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 12).padding(.vertical, 10)
         .background(Theme.chip, in: RoundedRectangle(cornerRadius: 8))
+    }
+}
+
+
+/// Settings: disk used by node worktrees, and cleanup of merged ones.
+struct WorktreeSettings: View {
+    @ObservedObject var canvas: CanvasModel
+    @State private var bytes: Int64?
+    @State private var cleaning = false
+    @State private var result: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("节点 worktree").font(Theme.sans(13, weight: .medium))
+            Text("信任的 git 项目里，每个节点在自己的 worktree 和分支上改代码。清理只删除已经合并回基础分支、而且没有未提交改动的 worktree；分支保留，节点下次发送时会自动恢复。")
+                .font(Theme.sans(11)).foregroundStyle(Theme.muted).fixedSize(horizontal: false, vertical: true)
+            HStack {
+                Text(NSString(string: canvas.worktreeRoot.path).abbreviatingWithTildeInPath).font(Theme.mono(11)).lineLimit(1).truncationMode(.middle)
+                Spacer()
+                let count = canvas.allWorktrees.filter(\.exists).count
+                Text("\(count) 个 · \(bytes.map { ByteCountFormatter.string(fromByteCount: $0, countStyle: .file) } ?? "计算中…")").metaText()
+            }
+            HStack {
+                if let result { Text(result).metaText() }
+                Spacer()
+                Button(cleaning ? "正在清理…" : "清理已合并节点的 worktree") {
+                    cleaning = true
+                    Task {
+                        let removed = await canvas.cleanupMergedWorktrees()
+                        result = removed == 0 ? "没有可以清理的 worktree。" : "已清理 \(removed) 个 worktree。"
+                        cleaning = false
+                        await measure()
+                    }
+                }
+                .buttonStyle(SecondaryButtonStyle())
+                .disabled(cleaning)
+            }
+        }
+        .themedCard()
+        .task { await measure() }
+    }
+
+    private func measure() async {
+        let root = canvas.worktreeRoot
+        bytes = await Task.detached { ProjectGit.diskUsage(root) }.value
     }
 }

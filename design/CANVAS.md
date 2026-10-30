@@ -217,7 +217,11 @@ Provider 色（主色 / 浅色头部 / 深色头部）：
 | `chain.downstream` / `chain.stop` | `boardID`、`nodeID` | 确认后按顺序重跑下游；停止正在进行的重跑 |
 | `provider.refresh` | `provider` | 读取模型和档位列表（连接检查，不发起模型回合） |
 | `attachment.choose` / `attachment.remove` | `sessionID`、`attachmentID` | 用原生文件面板添加文件，或移除待发送文件 |
-| `confirm.answer` | `id`、`ok` | 回答 `confirm.show`；只有点击操作按钮时 `ok` 为 true |
+| `confirm.answer` | `id`、`ok`、`checked?` | 回答 `confirm.show`；只有点击操作按钮时 `ok` 为 true；确认框带勾选项时 `checked` 是它的状态 |
+| `node.mergeToBase` / `node.combine` / `node.revealWorktree` | `boardID`、`nodeID` | worktree（HARNESS.md H2）：确认后合并到基础分支；合流节点合并上游分支；在访达中显示 |
+| `edge.setDiff` | `boardID`、`edgeID`、`ok` | 数据线是否附带上游分支的 diff 摘要 |
+| `board.gitInit` | `boardID` | 确认后在项目文件夹里 `git init` 并做初始提交 |
+| `notice.dismiss` | — | 关闭 `state.notice` 提示 |
 
 Swift → 网页：`window.agentDesk.receive(payload)`
 
@@ -226,7 +230,8 @@ Swift → 网页：`window.agentDesk.receive(payload)`
 | `snapshot` | 画布列表、当前画布（资料节点带 `source`：类型、名称、文件列表或 MCP 结果、是否正在导入）、全部会话摘要（标题、provider、模型、最后一条回复的预览、状态）、被关注会话的完整消息、运行状态、错误 |
 | `patch` | 摘要变化、被关注会话的新增或替换消息、文字增量（`append`） |
 | `composer.insert` | 把 MCP 结果插入某个节点的输入框 |
-| `confirm.show` | `id`、`title`、`detail`、`action`：在页面内显示确认框（删除画布、删除节点、重跑下游） |
+| `confirm.show` | `id`、`title`、`detail`、`action`、`checkbox?`：在页面内显示确认框（删除画布、删除节点、重跑下游、合并到基础分支、初始化 git）；`checkbox` 是可选的勾选项，例如“同时删除分支” |
+| `state` 里的 `notice` 和节点的 `worktree` | 中性提示（合并完成、本轮只读）；节点的 worktree 分支、基础分支、路径、是否已清理 |
 | `state` 里的 `models` / `quotas` / `drafts` | 各 provider 的模型选项、额度窗口、被关注会话的待发送文件 |
 
 文件拖放：原生层收到拖进窗口的文件后，调用页面的 `window.agentDesk.dropTarget(x, y)` 问落点是什么（`panel` / `source` / `canvas` 及画布坐标 / `none`），页面不会拿到文件路径或内容。“放到画布上”用 `window.agentDesk.viewCenter()` 取当前视图中心作为新节点位置。

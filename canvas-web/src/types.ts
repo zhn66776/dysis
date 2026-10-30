@@ -6,7 +6,20 @@ export type SessionState = 'empty' | 'running' | 'complete' | 'failed' | 'cancel
 export type MessageState = 'complete' | 'streaming' | 'failed' | 'cancelled'
 
 /** A board's project folder; trusted is null until asked. */
-export interface BoardProject { path: string; name: string; trusted: boolean | null; missing: boolean }
+export interface BoardProject {
+  path: string; name: string; trusted: boolean | null; missing: boolean
+  /** In a git work tree: trusted boards give each node a worktree. */
+  git?: boolean
+}
+
+/** A node's own git worktree (HARNESS.md H2). */
+export interface WorktreePayload {
+  branch: string
+  base?: string
+  path: string
+  /** Cleaned up; the next send recreates it from the branch. */
+  missing: boolean
+}
 export interface BoardSummary { id: string; title: string; nodeCount: number; project?: BoardProject | null }
 
 export interface NodePayload {
@@ -24,6 +37,7 @@ export interface NodePayload {
   downstream: number
   /** Files and MCP result nodes: read-only material, only ever a data-edge source. */
   source?: SourcePayload
+  worktree?: WorktreePayload
 }
 
 export type FileKind = 'image' | 'pdf' | 'document' | 'text'
@@ -52,6 +66,8 @@ export interface EdgePayload {
   /** Data edges: the source has a reply the target has not received yet. */
   sourceMessageID?: string
   pending?: boolean
+  /** Data edges: also deliver the source's branch diff summary. */
+  includeDiff?: boolean
 }
 
 export interface CanvasGroup { id: string; title: string; nodeIDs: string[] }
@@ -125,6 +141,8 @@ export interface StatePayload {
   chain: Chain
   running: string[]
   error: string
+  /** A neutral result to show once (merge done, a read-only turn). */
+  notice?: string
   fitBoardID?: string
   focusNodeID?: string
 }
@@ -132,7 +150,7 @@ export interface StatePayload {
 export interface ComposerInsert { type: 'composer.insert'; sessionID: string; text: string }
 
 /** Swift asks for an explicit yes before a destructive or call-spending action. */
-export interface ConfirmShow { type: 'confirm.show'; id: string; title: string; detail: string; action: string }
+export interface ConfirmShow { type: 'confirm.show'; id: string; title: string; detail: string; action: string; checkbox?: string }
 
 /** Height of the transparent title bar and where the traffic lights end, in CSS px (0 in full screen). */
 export interface ChromeInsets { type: 'chrome'; top: number; left: number }
@@ -184,7 +202,11 @@ export type Command =
   | { type: 'node.rerun'; boardID: string; nodeID: string }
   | { type: 'chain.downstream'; boardID: string; nodeID: string }
   | { type: 'chain.stop' }
-  | { type: 'confirm.answer'; id: string; ok: boolean }
+  | { type: 'confirm.answer'; id: string; ok: boolean; checked?: boolean }
+  | { type: 'node.mergeToBase' | 'node.combine' | 'node.revealWorktree'; boardID: string; nodeID: string }
+  | { type: 'edge.setDiff'; boardID: string; edgeID: string; ok: boolean }
+  | { type: 'board.gitInit'; boardID: string }
+  | { type: 'notice.dismiss' }
   | { type: 'chrome.regions'; drag: Region[]; noDrag: Region[] }
   | { type: 'source.createFiles'; boardID: string; x: number; y: number }
   | { type: 'source.addFiles'; boardID: string; nodeID: string }
@@ -200,6 +222,7 @@ export interface AppState {
   details: Record<string, SessionDetail>
   running: Set<string>
   error: string
+  notice: string
   fitBoardID?: string
   focusNodeID?: string
   models: Partial<Record<Provider, ModelOption[]>>

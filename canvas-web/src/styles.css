@@ -96,6 +96,7 @@ input, textarea { font: inherit; color: var(--tx); }
 .canvas-empty { position: absolute; top: 42%; left: 50%; transform: translate(-50%, -50%); text-align: center; color: var(--mu); pointer-events: none; }
 .empty-title { font-family: var(--serif); font-size: 18px; color: var(--tx); margin-bottom: 4px; }
 .preview-badge { position: absolute; bottom: 12px; right: 14px; z-index: 5; font-size: 11px; color: var(--mu); background: var(--card); border: 1px solid var(--bd); border-radius: 6px; padding: 2px 8px; }
+.notice-banner { position: absolute; top: 44px; left: 50%; transform: translateX(-50%); z-index: 20; display: flex; gap: 8px; align-items: center; max-width: 70%; background: var(--card); color: var(--tx); border: 1px solid var(--bd2); border-radius: 10px; padding: 6px 8px 6px 12px; user-select: text; box-shadow: 0 4px 16px rgba(0,0,0,.12); }
 .error-banner { position: absolute; top: 44px; left: 50%; transform: translateX(-50%); z-index: 20; display: flex; gap: 8px; align-items: center; max-width: 70%; background: var(--bad-bg); color: var(--bad); border: 1px solid var(--bad); border-radius: 10px; padding: 6px 8px 6px 12px; user-select: text; }
 
 .menu { position: absolute; z-index: 30; width: 220px; background: var(--card); border: 1px solid var(--bd2); border-radius: 12px; padding: 6px; box-shadow: 0 8px 24px rgba(0,0,0,0.12); }
@@ -273,6 +274,7 @@ input, textarea { font: inherit; color: var(--tx); }
 .modal-backdrop { position: fixed; inset: 0; z-index: 100; display: grid; place-items: center; background: rgba(43, 42, 38, 0.18); }
 .modal { width: 380px; max-width: calc(100% - 32px); background: var(--card); border: 1px solid var(--bd2); border-radius: var(--r); padding: 18px 18px 14px; box-shadow: 0 12px 32px rgba(0,0,0,0.16); user-select: text; }
 .modal-title { font-size: 14px; font-weight: 600; margin-bottom: 6px; }
+.modal-check { display: flex; gap: 6px; align-items: center; margin-top: 10px; font-size: 12px; }
 .modal-detail { font-size: 12px; color: var(--mu); line-height: 1.55; }
 .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
 .modal-actions .btn:focus-visible { outline: 1.5px solid var(--ring); outline-offset: 1px; }
@@ -354,3 +356,11 @@ input, textarea { font: inherit; color: var(--tx); }
 .group-dissolve { background: transparent; border: 1px solid transparent; color: var(--mu); font-size: 11px; padding: 2px 6px; border-radius: 5px; }
 .group-dissolve:hover { background: var(--card); border-color: var(--bd2); color: var(--tx); }
 .group-rename { width: 160px; min-width: 30px; background: var(--card); border: 1px solid var(--bd2); border-radius: 4px; padding: 1px 4px; font-size: 13px; }
+
+/* Worktrees (HARNESS.md H2) */
+.worktree-row { display: flex; align-items: center; gap: 6px; padding: 6px 14px; border-bottom: 1px solid var(--bd); flex-wrap: wrap; }
+.worktree-row .chip { max-width: 60%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.upstream-item { display: inline-flex; gap: 4px; align-items: center; }
+.diff-toggle { cursor: pointer; opacity: .75; }
+.diff-toggle.on { opacity: 1; font-weight: 600; }
+.node-foot .branch { margin-left: 6px; opacity: .8; }

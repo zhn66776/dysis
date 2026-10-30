@@ -9,7 +9,11 @@ import AgentDeskCore
 // turns stays on this side.
 
 struct BridgeBoardSummary: Encodable, Equatable {
-    struct Project: Encodable, Equatable { let path: String; let name: String; let trusted: Bool?; let missing: Bool }
+    struct Project: Encodable, Equatable {
+        let path: String; let name: String; let trusted: Bool?; let missing: Bool
+        /// In a git work tree: trusted boards give each node a worktree.
+        let git: Bool
+    }
     let id: UUID; let title: String; let nodeCount: Int
     let project: Project?
 }
@@ -30,6 +34,17 @@ struct BridgeNode: Encodable, Equatable {
     let downstream: Int
     /// Files and MCP result nodes; nil for chat nodes.
     let source: BridgeSource?
+    /// The node's own git worktree (HARNESS.md H2).
+    let worktree: BridgeWorktree?
+}
+
+struct BridgeWorktree: Encodable, Equatable {
+    let branch: String, base: String?, path: String
+    /// Removed by cleanup; the next send recreates it from the branch.
+    let missing: Bool
+    init(_ w: NodeWorktree) {
+        branch = w.branch; base = w.baseBranch; path = NSString(string: w.workingDirectory).abbreviatingWithTildeInPath; missing = !w.exists
+    }
 }
 
 struct BridgeSource: Encodable, Equatable {
@@ -55,7 +70,11 @@ struct BridgeChain: Encodable, Equatable {
     static let idle = BridgeChain(boardID: nil, total: 0, index: 0, currentNodeID: nil)
 }
 
-struct BridgeEdge: Encodable, Equatable { let id: UUID; let kind: CanvasEdgeKind; let source: UUID; let target: UUID; let pending: Bool?; let sourceMessageID: UUID? }
+struct BridgeEdge: Encodable, Equatable {
+    let id: UUID; let kind: CanvasEdgeKind; let source: UUID; let target: UUID; let pending: Bool?; let sourceMessageID: UUID?
+    /// Data edges: also deliver the source's branch diff summary.
+    let includeDiff: Bool?
+}
 
 struct BridgeBoard: Encodable, Equatable {
     let id: UUID, title: String, nodes: [BridgeNode], edges: [BridgeEdge], groups: [CanvasGroup], viewport: CanvasViewport?
@@ -108,6 +127,7 @@ struct BridgeState: Encodable {
     var chain: BridgeChain = .idle
     var running: [UUID]
     var error: String
+    var notice: String = ""
     var focusNodeID: UUID?
     var fitBoardID: UUID?
 }
@@ -117,7 +137,7 @@ struct BridgeCommand: Decodable {
     struct Rect: Decodable { let x: Double; let y: Double; let w: Double; let h: Double }
     let type: String
     var boardID: UUID?, nodeID: UUID?, sessionID: UUID?, messageID: UUID?
-    var source: UUID?, target: UUID?, connectFrom: UUID?, panelSessionID: UUID?, groupID: UUID?
+    var source: UUID?, target: UUID?, connectFrom: UUID?, panelSessionID: UUID?, groupID: UUID?, edgeID: UUID?
     var sizes: [CanvasNodeSize]?
     var nodeIDs: [UUID]?, edgeIDs: [UUID]?, sessionIDs: [UUID]?
     var positions: [Position]?
@@ -127,6 +147,8 @@ struct BridgeCommand: Decodable {
     var modelID: String?, effort: String?, attachmentID: UUID?, template: String?
     /// `confirm.answer`: the dialog ID Swift issued and whether the user clicked the action.
     var id: UUID?, ok: Bool?
+    /// `confirm.answer`: the dialog's checkbox, when it had one.
+    var checked: Bool?
     /// `chrome.regions`: page areas (CSS px from the top-left) that move the window, and controls inside them that do not.
     var drag: [Rect]?, noDrag: [Rect]?
 }
@@ -202,10 +224,11 @@ enum BridgeEncoding {
                               merge: n.merge?.title, stale: stale.contains(n.id),
                               // Offer a re-run only when a direct downstream node is behind this one.
                               downstream: b.edges.contains { $0.kind == .data && $0.source == n.id && stale.contains($0.target) } ? b.downstreamOrder(from: n.id, include: ran).count : 0,
-                              source: n.source.map { BridgeSource($0, importing: importing.contains(n.id)) })
+                              source: n.source.map { BridgeSource($0, importing: importing.contains(n.id)) },
+                              worktree: n.worktree.map(BridgeWorktree.init))
         }
         let pending = b.nodes.reduce(into: Set<UUID>()) { $0.formUnion(CanvasContextBuilder.pendingEdges(board: b, nodeID: $1.id, sessions: sessions)) }
-        let edges = b.edges.map { BridgeEdge(id: $0.id, kind: $0.kind, source: $0.source, target: $0.target, pending: $0.kind == .data ? pending.contains($0.id) : nil, sourceMessageID: $0.sourceMessageID) }
+        let edges = b.edges.map { BridgeEdge(id: $0.id, kind: $0.kind, source: $0.source, target: $0.target, pending: $0.kind == .data ? pending.contains($0.id) : nil, sourceMessageID: $0.sourceMessageID, includeDiff: $0.includeDiff) }
         return BridgeBoard(id: b.id, title: b.title, nodes: nodes, edges: edges, groups: b.groups, viewport: b.viewport, history: history)
     }
 }
@@ -227,13 +250,14 @@ final class CanvasBridge: NSObject, ObservableObject, WKScriptMessageHandler {
     private var sentSummaries: [UUID: BridgeSummary] = [:]
     private var sentDetails: [UUID: [BridgeMessage]] = [:]
     private var sentError = ""
+    private var sentNotice = ""
     private var sentRunning: Set<UUID> = []
     private var sentModels: [String: [BridgeModelOption]]?
     private var sentChain: BridgeChain = .idle
     private var sentQuotas: [String: BridgeQuota]?
     private var sentDrafts: [UUID: BridgeDraft] = [:]
     /// Open confirmations; each runs at most once, and only on `confirm.answer` with ok.
-    private var pendingConfirms: [UUID: () -> Void] = [:]
+    private var pendingConfirms: [UUID: (Bool) -> Void] = [:]
     /// Where a mouse-down moves the window, as the page last reported it.
     private var dragRects: [CGRect] = [], noDragRects: [CGRect] = []
     /// The session whose panel is open (first watched ID); file drops go here.
@@ -320,14 +344,15 @@ final class CanvasBridge: NSObject, ObservableObject, WKScriptMessageHandler {
             return
         case "confirm.answer":
             guard let id = c.id, let perform = pendingConfirms.removeValue(forKey: id) else { return }
-            if c.ok == true { perform() }
+            if c.ok == true { perform(c.checked == true) }
         case "board.create": canvas.createBoard()
         case "board.select": if let id = c.boardID { canvas.selectBoard(id) }
         case "board.rename": if let id = c.boardID, let title = c.title { canvas.renameBoard(id, title: title) }
         case "board.delete":
             guard let id = c.boardID, let board = canvas.library.boards.first(where: { $0.id == id }) else { return }
             let folder = board.project.map { "项目文件夹 \(NSString(string: $0.path).abbreviatingWithTildeInPath) 和里面的文件保留，不会删除。" } ?? "官方 CLI 中的历史和工作目录文件不受影响。"
-            confirm(title: "删除画布「\(board.title)」？", detail: "画布上的 \(board.nodes.count) 个对话的本地记录也会删除。\(folder)", action: "删除画布") { [canvas] in
+            let worktrees = board.nodes.contains { $0.worktree != nil } ? "节点的 worktree 会删除（分支保留，未提交的改动存成快照）。" : ""
+            confirm(title: "删除画布「\(board.title)」？", detail: "画布上的 \(board.nodes.count) 个对话的本地记录也会删除。\(folder)\(worktrees)", action: "删除画布") { [canvas] _ in
                 canvas.deleteBoard(id)
             }
         case "board.linkFolder": if let id = c.boardID { canvas.linkFolder(id) }
@@ -351,8 +376,11 @@ final class CanvasBridge: NSObject, ObservableObject, WKScriptMessageHandler {
             let titles = nodes.compactMap { node in node.source?.title ?? app.sessions.first { $0.id == node.sessionID }?.title }
             let name = titles.count == 1 ? "「\(titles[0])」" : "\(ids.count) 个节点"
             let files = nodes.contains { $0.source?.kind == .files } ? "文件节点里复制的文件也会删除，原文件保留。" : ""
-            confirm(title: "删除\(name)？", detail: "这会删除本地会话记录并清空本画布的撤销历史，无法通过画布撤销恢复。官方 CLI 中的历史和工作目录文件保留。" + files, action: "删除") { [canvas] in
-                canvas.deleteNodes(boardID: id, nodeIDs: Set(ids))
+            let worktrees = nodes.compactMap(\.worktree)
+            let worktreeNote = worktrees.isEmpty ? "" : "节点的 worktree 会删除；未提交的改动先存成快照引用，分支默认保留。"
+            confirm(title: "删除\(name)？", detail: "这会删除本地会话记录并清空本画布的撤销历史，无法通过画布撤销恢复。官方 CLI 中的历史保留。" + files + worktreeNote,
+                    action: "删除", checkbox: worktrees.isEmpty ? nil : "同时删除分支（\(worktrees.map(\.branch).joined(separator: "、"))）") { [canvas] deleteBranches in
+                canvas.deleteNodes(boardID: id, nodeIDs: Set(ids), deleteBranches: deleteBranches)
             }
         case "node.rename":
             guard let id = c.sessionID, let title = c.title?.trimmingCharacters(in: .whitespacesAndNewlines), !title.isEmpty else { return }
@@ -493,7 +521,7 @@ final class CanvasBridge: NSObject, ObservableObject, WKScriptMessageHandler {
             guard !order.isEmpty else { return }
             let board = canvas.library.boards.first { $0.id == b }
             let names = order.compactMap { id in board?.node(id).flatMap { node in app.sessions.first { $0.id == node.sessionID }?.title } }
-            confirm(title: "重跑下游：调用 \(order.count) 次？", detail: "按顺序重新回答：\(names.map { "「\($0)」" }.joined(separator: " → "))。每个节点会带上上游的新输出重新回答上一个问题；某个节点没有完成时，后面的节点不会运行。", action: "重跑 \(order.count) 个节点") { [canvas] in
+            confirm(title: "重跑下游：调用 \(order.count) 次？", detail: "按顺序重新回答：\(names.map { "「\($0)」" }.joined(separator: " → "))。每个节点会带上上游的新输出重新回答上一个问题；某个节点没有完成时，后面的节点不会运行。", action: "重跑 \(order.count) 个节点") { [canvas] _ in
                 canvas.runChain(boardID: b, order: order)
             }
         case "chain.stop":
@@ -505,6 +533,29 @@ final class CanvasBridge: NSObject, ObservableObject, WKScriptMessageHandler {
             if let id = c.sessionID { app.attachmentDrafts.choose(for: id) }
         case "attachment.remove":
             if let id = c.sessionID, let file = c.attachmentID { app.attachmentDrafts.remove(file, from: id) }
+        case "node.mergeToBase":
+            guard let b = c.boardID, let n = c.nodeID, let node = canvas.library.boards.first(where: { $0.id == b })?.node(n),
+                  let worktree = node.worktree else { return }
+            let title = app.sessions.first { $0.id == node.sessionID }?.title ?? "节点"
+            let base = worktree.baseBranch ?? "基础分支"
+            confirm(title: "把「\(title)」合并到 \(base)？",
+                    detail: "先把这个节点未提交的改动提交到它的分支 \(worktree.branch)，再在项目目录里执行 git merge --no-ff。项目目录需要是干净的、在 \(base) 上。有冲突时会放弃这次合并并列出冲突文件，不会自动解决；不会推送。",
+                    action: "合并到 \(base)") { [canvas] _ in canvas.mergeToBase(boardID: b, nodeID: n) }
+        case "node.combine":
+            guard let b = c.boardID, let n = c.nodeID else { return }
+            canvas.combineBranches(boardID: b, nodeID: n)
+        case "node.revealWorktree":
+            guard let b = c.boardID, let n = c.nodeID, let url = canvas.revealWorktree(boardID: b, nodeID: n) else { return }
+            NSWorkspace.shared.activateFileViewerSelecting([url])
+            return
+        case "edge.setDiff":
+            guard let b = c.boardID, let e = c.edgeID, let on = c.ok else { return }
+            canvas.setEdgeDiff(boardID: b, edgeID: e, on: on)
+        case "board.gitInit":
+            guard let b = c.boardID, let project = canvas.library.boards.first(where: { $0.id == b })?.project else { return }
+            confirm(title: "在「\(project.name)」初始化 git？", detail: "运行 git init，并把文件夹里现有的文件做一次初始提交。之后新建的节点各有自己的 worktree 和分支，可以并行改代码。", action: "初始化 git") { [canvas] _ in
+                Task { await canvas.initializeGit(b) }
+            }
         case "chat.send":
             guard let b = c.boardID, let n = c.nodeID, let text = c.text else { return }
             canvas.send(boardID: b, nodeID: n, text: text)
@@ -521,6 +572,8 @@ final class CanvasBridge: NSObject, ObservableObject, WKScriptMessageHandler {
         case "app.open":
             if let window = c.window, ["settings", "classic", "mcp"].contains(window) { openWindow(window, c.sessionID) }
             return
+        case "notice.dismiss":
+            app.noticeMessage = nil
         case "error.dismiss":
             app.errorMessage = nil
             app.plaza.errorMessage = nil
@@ -533,11 +586,14 @@ final class CanvasBridge: NSObject, ObservableObject, WKScriptMessageHandler {
     /// Asks the page to show its confirmation dialog (`confirm.show`). The
     /// action runs only when the page answers this ID with ok after a click;
     /// cancel, Esc or a reload decline it.
-    private func confirm(title: String, detail: String, action: String, perform: @escaping () -> Void) {
+    /// `checkbox` adds an option the user can tick; `perform` receives it.
+    private func confirm(title: String, detail: String, action: String, checkbox: String? = nil, perform: @escaping (Bool) -> Void) {
         guard ready, webView != nil else { return }
         let id = UUID()
         pendingConfirms[id] = perform
-        evaluate(["type": "confirm.show", "id": id.uuidString, "title": title, "detail": detail, "action": action])
+        var payload: [String: Any] = ["type": "confirm.show", "id": id.uuidString, "title": title, "detail": detail, "action": action]
+        if let checkbox { payload["checkbox"] = checkbox }
+        evaluate(payload)
     }
 
     // MARK: Window chrome
@@ -573,7 +629,8 @@ final class CanvasBridge: NSObject, ObservableObject, WKScriptMessageHandler {
     private func push(reset: Bool) {
         guard ready else { return }
         let sessions = canvas.sessionsByID
-        var state = BridgeState(running: Array(app.runningSessionIDs), error: app.errorMessage ?? app.plaza.errorMessage ?? app.attachmentDrafts.errorMessage ?? "")
+        var state = BridgeState(running: Array(app.runningSessionIDs), error: app.errorMessage ?? app.plaza.errorMessage ?? app.attachmentDrafts.errorMessage ?? "",
+                                notice: app.noticeMessage ?? "")
         if reset {
             state.reset = true
             sentBoards = nil; sentBoard = nil; sentSummaries = [:]; sentDetails = [:]
@@ -582,7 +639,8 @@ final class CanvasBridge: NSObject, ObservableObject, WKScriptMessageHandler {
 
         let boards = canvas.library.boards.map { b in
             BridgeBoardSummary(id: b.id, title: b.title, nodeCount: b.nodes.count, project: b.project.map {
-                .init(path: NSString(string: $0.path).abbreviatingWithTildeInPath, name: $0.name, trusted: $0.trusted, missing: !FileManager.default.fileExists(atPath: $0.path))
+                .init(path: NSString(string: $0.path).abbreviatingWithTildeInPath, name: $0.name, trusted: $0.trusted, missing: !FileManager.default.fileExists(atPath: $0.path),
+                      git: canvas.isGit($0.path))
             })
         }
         if boards != sentBoards { state.boards = boards; sentBoards = boards }
@@ -639,8 +697,9 @@ final class CanvasBridge: NSObject, ObservableObject, WKScriptMessageHandler {
         let changed = reset || state.boards != nil || state.board != nil || state.summaries != nil || state.removedSessions != nil
             || state.details != nil || state.appends != nil || state.focusNodeID != nil || state.fitBoardID != nil
             || state.models != nil || state.quotas != nil || state.drafts != nil || state.chain != sentChain
-            || state.error != sentError || app.runningSessionIDs != sentRunning
+            || state.error != sentError || state.notice != sentNotice || app.runningSessionIDs != sentRunning
         sentError = state.error
+        sentNotice = state.notice
         sentRunning = app.runningSessionIDs
         sentChain = state.chain
         if changed, let data = try? JSONEncoder().encode(state), let json = String(data: data, encoding: .utf8) {

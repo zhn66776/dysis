@@ -16,6 +16,8 @@ final class AppModel: ObservableObject {
     @Published var isChecking: Set<ProviderID> = []
     @Published var activeStatus: [UUID: String] = [:]
     @Published var errorMessage: String?
+    /// A neutral result to show once (a merge done, a turn that only reads).
+    @Published var noticeMessage: String?
     /// Latest subscription usage per provider, kept for this launch only.
     @Published var quotas: [ProviderID: ProviderQuota] = [:]
     private var quotaReadAt: [ProviderID: Date] = [:]
@@ -87,6 +89,13 @@ final class AppModel: ObservableObject {
     func renameSession(_ id: UUID, title: String) {
         guard let index = sessions.firstIndex(where: { $0.id == id }) else { return }
         sessions[index].title = String(title.prefix(100))
+        persist()
+    }
+
+    /// A merge node that got a worktree works there from its next turn.
+    func setWorkingDirectory(_ id: UUID, path: String) {
+        guard storageReadable, !runningSessionIDs.contains(id), let i = sessions.firstIndex(where: { $0.id == id }) else { return }
+        sessions[i].workingDirectory = path
         persist()
     }
 
@@ -174,7 +183,8 @@ final class AppModel: ObservableObject {
     /// Returns whether the turn started.
     @discardableResult
     /// `project` is the board's folder: once trusted, the provider may write and run commands there.
-    func send(_ text: String, to id: UUID, context: CanvasPromptContext = .init(), project: CanvasProject? = nil) -> Bool {
+    /// `writable`, when given, decides that instead (the canvas: a node's own worktree, one writer per shared folder).
+    func send(_ text: String, to id: UUID, context: CanvasPromptContext = .init(), project: CanvasProject? = nil, writable: Bool? = nil) -> Bool {
         guard storageReadable,
               let index = sessions.firstIndex(where: { $0.id == id }), !runningSessionIDs.contains(id) else { return false }
         guard !attachmentDrafts.importing.contains(id) else { return false }
@@ -214,7 +224,7 @@ final class AppModel: ObservableObject {
         sessions[index].updatedAt = Date()
         let session = sessions[index]
         let request = AgentRequest(localSessionID: id, remoteSessionID: session.remoteSessionID, prompt: input, workingDirectory: URL(fileURLWithPath: session.workingDirectory), modelID: session.modelID, executableURL: executable, reasoningEffort: session.reasoningEffort, images: images, forkFrom: session.remoteSessionID == nil ? context.fork : nil, mcpServers: modelMCPServers(sessionID: id),
-                                   projectAccess: project?.isTrusted == true && project?.path == session.workingDirectory,
+                                   projectAccess: writable ?? (project?.isTrusted == true && project?.path == session.workingDirectory),
                                    userFolder: !URL(fileURLWithPath: session.workingDirectory).path.hasPrefix(dataRoot.path + "/"))
         let backend: any AgentBackend
         switch provider {

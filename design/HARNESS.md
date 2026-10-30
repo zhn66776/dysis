@@ -1,6 +1,6 @@
 # AgentDesk Harness 改造方案 · v1
 
-> 整理日期：2026-10-30　｜　状态：方案，尚未实施
+> 整理日期：2026-10-30　｜　状态：H2 已实施（分支 `claude/harness-worktrees-d88367`），其余为方案
 > 依据的版本：Claude Code 2.1.308，codex-cli 0.165.0-alpha.1.2（ChatGPT.app 内置），AgentDesk main `b21c4ae`。
 > 本文只讨论“画布节点背后怎么跑 agent”。画布交互见 `CANVAS.md`。
 
@@ -130,6 +130,12 @@
 验收：
 - 离线测试：用临时仓库测创建、分支快照、合并、冲突报告、删除。
 - 实际调用：同一项目两个节点各改一个文件，然后合并回主线。
+
+**实施状态（2026-10-30，H2 已完成，离线验证）**：
+- 代码：`Sources/AgentDeskCore/Worktrees.swift`（`NodeWorktree`、`ProjectGit`、`DiffStat`），`CanvasWriteAccess`（谁可以写），`CanvasModel` 的建节点、分支、合并、清理，面板的 worktree 行，侧栏“初始化 git…”，设置里的“节点 worktree”。
+- 与方案的差别：快照不用 `git stash create`（它不含未跟踪文件），而是用临时索引 `read-tree HEAD` + `add -A` + `commit-tree`，同样不动父 worktree 的分支、索引和文件。合并到主线前先把节点未提交的改动提交到它自己的分支。清理掉的 worktree 在节点下次发送时从分支恢复。合流节点合并上游分支时，冲突留给它的模型解决；再点一次完成合并并继续。
+- 离线测试：`WorktreeTests`（13 个，临时仓库）。
+- 待实际验证：见 §4 “worktree 与原生分叉”，Claude 的 `--resume <id> --fork-session` 换了工作目录后能否找到父会话（Claude Code 按工作目录存会话，未验证）；不行时现有的回退会把这条继承线改成回放。Codex 的 `thread/fork` 带 `cwd`，预计不受影响。
 
 ### H3 · 过程可见与撤销（必要）
 

@@ -34,6 +34,9 @@ export function ChatPanel({ state, node, draft, onDraft, onClose, composerFocus,
   const parent = parentNode ? state.summaries[parentNode.sessionID] : undefined
   const parentDetail = parentNode ? state.details[parentNode.sessionID] : undefined
   const upstream = dataInputs(board, node.id, state.summaries)
+  const hasWorktree = (id: string) => Boolean(board.nodes.find(n => n.id === id)?.worktree)
+  const branchInputs = upstream.filter(u => hasWorktree(u.edge.source)).length
+  const worktree = node.worktree
 
   // Follow the stream only while the reader is already at the bottom.
   useLayoutEffect(() => {
@@ -92,6 +95,24 @@ export function ChatPanel({ state, node, draft, onDraft, onClose, composerFocus,
         </div>
       </header>
 
+      {(worktree || (node.merge && branchInputs > 0)) && (
+        <div className="worktree-row">
+          {worktree
+            ? <span className="chip meta" title={worktree.path}>⎇ {worktree.branch}{worktree.missing ? ' · 已清理，下次发送时恢复' : ''}</span>
+            : <span className="sub">合流节点只读上游的结论</span>}
+          <span className="spacer" />
+          {worktree && !worktree.missing && <button className="act" onClick={() => send({ type: 'node.revealWorktree', boardID: board.id, nodeID: node.id })}>在访达中显示</button>}
+          {node.merge && branchInputs > 0 && (
+            <button className="act" disabled={running} title="把上游节点的分支依次合并到这个节点的 worktree；有冲突时留给这个节点的模型解决"
+              onClick={() => send({ type: 'node.combine', boardID: board.id, nodeID: node.id })}>合并上游分支到这里</button>
+          )}
+          {worktree && (
+            <button className="act" disabled={running} title="提交这个节点的改动，再 git merge --no-ff 到项目目录；不推送"
+              onClick={() => send({ type: 'node.mergeToBase', boardID: board.id, nodeID: node.id })}>合并到 {worktree.base ?? '基础分支'}</button>
+          )}
+        </div>
+      )}
+
       {node.stale && !running && (
         <div className="stale-banner">
           <span>上游有新的输出，这个回答可能已经过期。</span>
@@ -120,10 +141,19 @@ export function ChatPanel({ state, node, draft, onDraft, onClose, composerFocus,
             <div className="upstream">
               <span className="sub">数据线输入</span>
               {upstream.map(u => (
-                <button key={u.edge.id} onClick={() => setContextOpen(true)} className={`chip context-chip ${u.source ? 'source-chip' : `p-${u.provider ?? 'claude'} tinted`}`}
-                  title={u.source ? '预览本轮实际输入；资料更新后会再次带上' : '预览本轮实际输入；断开连线只停止后续传入'}>
-                  {u.source ? `${u.source.kind === 'mcp' ? 'MCP' : '文件'} · ${u.title}` : `→ ${u.title}${u.edge.sourceMessageID ? ' · 指定回复' : ' · 跟随最新'}`}{u.edge.pending ? ' · 待传入' : ' · 本轮无新增'}
-                </button>
+                <span key={u.edge.id} className="upstream-item">
+                  <button onClick={() => setContextOpen(true)} className={`chip context-chip ${u.source ? 'source-chip' : `p-${u.provider ?? 'claude'} tinted`}`}
+                    title={u.source ? '预览本轮实际输入；资料更新后会再次带上' : '预览本轮实际输入；断开连线只停止后续传入'}>
+                    {u.source ? `${u.source.kind === 'mcp' ? 'MCP' : '文件'} · ${u.title}` : `→ ${u.title}${u.edge.sourceMessageID ? ' · 指定回复' : ' · 跟随最新'}`}{u.edge.pending ? ' · 待传入' : ' · 本轮无新增'}
+                  </button>
+                  {hasWorktree(u.edge.source) && (
+                    <button className={`chip diff-toggle${u.edge.includeDiff ? ' on' : ''}`} aria-pressed={Boolean(u.edge.includeDiff)}
+                      title="随上游回复一起传入它的分支相对基点的 diff 摘要（git diff --stat 加截断的 patch）"
+                      onClick={() => send({ type: 'edge.setDiff', boardID: board.id, edgeID: u.edge.id, ok: !u.edge.includeDiff })}>
+                      {u.edge.includeDiff ? '✓ 附带 diff' : '＋ diff'}
+                    </button>
+                  )}
+                </span>
               ))}
             </div>
           )}

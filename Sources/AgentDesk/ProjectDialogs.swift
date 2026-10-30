@@ -56,6 +56,22 @@ enum ProjectDialogs {
         return await present(alert) == .alertFirstButtonReturn
     }
 
+    /// Asked once per trusted folder that is not a git repository.
+    static func askGitInit(_ project: CanvasProject, root: URL) async -> Bool {
+        let alert = NSAlert()
+        alert.messageText = "初始化 git 以并行工作？"
+        alert.informativeText = """
+        「\(project.name)」还不是 git 仓库。
+
+        初始化后，每个节点在自己的 worktree（\(abbreviated(root.path)) 里）和分支上改代码，互不干扰；改好后用节点菜单“合并到”回主线。AgentDesk 会运行 git init，并把文件夹里现有的文件做一次初始提交。
+
+        不初始化的话，所有节点共用这个文件夹，同一时间只有一个节点能写入，其他节点这一轮只读。以后可以在侧栏里再初始化。
+        """
+        alert.addButton(withTitle: "初始化 git")
+        alert.addButton(withTitle: "暂不")
+        return await present(alert) == .alertFirstButtonReturn
+    }
+
     private static func present(_ alert: NSAlert) async -> NSApplication.ModalResponse {
         guard let window = NSApp.keyWindow ?? NSApp.mainWindow else { return alert.runModal() }
         return await withCheckedContinuation { continuation in

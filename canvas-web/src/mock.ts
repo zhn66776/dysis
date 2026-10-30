@@ -48,10 +48,12 @@ export function createMockHost(emit: (p: Incoming) => void) {
   const c = addSession('grok', 'Grok 竞品速览')
   const board: BoardPayload = { id: uid(), title: '示例画布', nodes: [], edges: [] }
   const na: NodePayload = { id: uid(), sessionID: a.id, x: 80, y: 120, stale: false, downstream: 0 }
-  const nb: NodePayload = { id: uid(), sessionID: b.id, x: 440, y: 120, stale: false, downstream: 0 }
+  const nb: NodePayload = { id: uid(), sessionID: b.id, x: 440, y: 120, stale: false, downstream: 0,
+    worktree: { branch: 'agentdesk/1a2b3c4d/5e6f7a8b', base: 'main', path: '~/AgentDesk Worktrees/示例项目/5e6f7a8b', missing: false } }
   const nc: NodePayload = { id: uid(), sessionID: c.id, x: 440, y: 340, stale: false, downstream: 0 }
   board.nodes.push(na, nb, nc)
   board.edges.push({ id: uid(), kind: 'data', source: na.id, target: nb.id, pending: true })
+  board.edges.push({ id: uid(), kind: 'data', source: nb.id, target: nc.id, pending: true })
 
   // Source nodes: read-only files and an MCP result, fed into two conversations.
   const file = (name: string, kind: SourceFile['kind'], bytes: number, note?: string): SourceFile => ({ id: uid(), name, kind, bytes, note })
@@ -101,7 +103,10 @@ export function createMockHost(emit: (p: Incoming) => void) {
 
   return (c: Command) => {
     switch (c.type) {
-      case 'ready': case 'error.dismiss': break
+      case 'ready': case 'error.dismiss': case 'notice.dismiss': break
+      case 'node.mergeToBase': case 'node.combine': case 'node.revealWorktree': case 'board.gitInit':
+        window.alert('浏览器预览：git 操作只在应用里运行。'); return
+      case 'edge.setDiff': { const e = boardNow().edges.find(x => x.id === c.edgeID); if (e) e.includeDiff = c.ok || undefined; break }
       case 'board.create': { const nb: BoardPayload = { id: uid(), title: '新画布', nodes: [], edges: [] }; boards.push(nb); current = nb.id; break }
       case 'board.select': current = c.boardID; break
       case 'board.rename': { const x = boards.find(y => y.id === c.boardID); if (x) x.title = c.title; break }
