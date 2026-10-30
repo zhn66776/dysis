@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Background, BackgroundVariant, Controls, MarkerType, MiniMap, ReactFlow, useReactFlow,
-  applyEdgeChanges, applyNodeChanges,
+  applyEdgeChanges,
   type Edge, type EdgeChange, type NodeChange, type OnBeforeDelete, type OnConnectEnd, type Viewport,
 } from '@xyflow/react'
 import { send } from './bridge'
 import { GroupNode, type GroupFlowNode } from './GroupNode'
-import { canvasHistoryAction, groupBounds, stableSelection } from './organize'
+import { applyContentNodeChanges, canvasHistoryAction, groupBounds, stableSelection } from './organize'
 import { ChatNode, type ChatFlowNode } from './ChatNode'
 import { CanvasSearch } from './CanvasSearch'
 import { latestReadable } from './interactions'
@@ -47,6 +47,7 @@ export function Canvas({ state, selectedNodeID, onSelect, expanded, onExpand, on
       const bounds = groupBounds(group, nodes)
       return bounds ? [{ id: `group:${group.id}`, type: 'groupFrame' as const, position: { x: bounds.x, y: bounds.y },
         width: bounds.width, height: bounds.height, style: { width: bounds.width, height: bounds.height },
+        measured: { width: bounds.width, height: bounds.height },
         zIndex: -1, selectable: false, deletable: false, draggable: true, dragHandle: '.group-handle',
         data: { groupID: group.id, boardID: board.id, title: group.title, count: group.nodeIDs.length },
       }] : []
@@ -180,7 +181,7 @@ export function Canvas({ state, selectedNodeID, onSelect, expanded, onExpand, on
 
   const onNodesChange = useCallback((changes: NodeChange<CanvasFlowNode>[]) => {
     // Removal goes through Swift (native confirmation); apply the rest locally.
-    setNodes(ns => applyNodeChanges(changes.filter(c => c.type !== 'remove' && 'id' in c && ns.some(n => n.id === c.id)) as NodeChange<FlowNode>[], ns))
+    setNodes(ns => applyContentNodeChanges(ns, changes))
   }, [])
   const onSelectionChange = useCallback(({ nodes: ns }: { nodes: CanvasFlowNode[] }) => {
     const ids = ns.filter(n => n.type !== 'groupFrame').map(n => n.id)

@@ -1,9 +1,16 @@
 import { describe, expect, it } from 'vitest'
-import { canvasHistoryAction, groupBounds, previewLayout, stableSelection } from './organize'
+import { applyContentNodeChanges, canvasHistoryAction, groupBounds, previewLayout, stableSelection } from './organize'
 import { createMockHost } from './mock'
 import type { Incoming, StatePayload } from './types'
 
 describe('canvas organization', () => {
+  it('ignores derived frame measurement events without starting another state update', () => {
+    const nodes = [{ id: 'a', position: { x: 0, y: 0 }, data: {} }]
+    const dimensions = { type: 'dimensions' as const, id: 'group:g', dimensions: { width: 500, height: 400 } }
+    expect(applyContentNodeChanges(nodes, [dimensions])).toBe(nodes)
+    expect(applyContentNodeChanges(nodes, [{ type: 'remove', id: 'a' }])).toBe(nodes)
+    expect(applyContentNodeChanges(nodes, [{ type: 'position', id: 'a', position: { x: 100, y: 20 } }])[0].position).toEqual({ x: 100, y: 20 })
+  })
   it('wraps expanded cards in a frame with header and padding', () => {
     const g = { id: 'g', title: 'g', nodeIDs: ['a', 'b'] }
     expect(groupBounds(g, [

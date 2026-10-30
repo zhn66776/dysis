@@ -1,4 +1,4 @@
-import type { Node } from '@xyflow/react'
+import { applyNodeChanges, type Node, type NodeChange } from '@xyflow/react'
 import type { BoardPayload, CanvasGroup, NodeSize } from './types'
 
 export function groupBounds(group: CanvasGroup, nodes: Node[]) {
@@ -15,6 +15,12 @@ export function groupBounds(group: CanvasGroup, nodes: Node[]) {
 /** React Flow can report the same selection again after node measurement. */
 export function stableSelection(previous: string[], next: string[]) {
   return previous.length === next.length && next.every(id => previous.includes(id)) ? previous : next
+}
+
+/** Derived group-frame measurements must not feed back into content-node state. */
+export function applyContentNodeChanges<T extends Node>(nodes: T[], changes: NodeChange<Node>[]) {
+  const relevant = changes.filter(c => c.type !== 'remove' && 'id' in c && nodes.some(n => n.id === c.id)) as NodeChange<T>[]
+  return relevant.length ? applyNodeChanges(relevant, nodes) : nodes
 }
 
 /** Text editing shortcuts belong to the focused editor; canvas shortcuts act on the board. */
