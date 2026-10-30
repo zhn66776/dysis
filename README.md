@@ -65,6 +65,13 @@ Frontend development: `cd canvas-web && npm ci && npm run dev` opens a browser p
 - **预览本轮输入** (also available by clicking an upstream chip) uses the same native text and attachment assembly as sending. It shows the current additional prompt, truncation markers and source reply numbers, distinguishing fixed quotations from live inputs and newly delivered content from earlier deliveries. Existing official session history and native-fork internals are identified separately; image inputs are separate from the text preview. Preview does not call a model. Sending reads the inputs again, so refresh the preview after upstream changes. Disconnecting an edge stops future input; material already in a provider session remains in that session history.
 - **搜索画布与历史** / **⌘F** searches titles and full local message history on the current board. Click a result (or use arrows and Enter) to locate its node and highlight the matching historical message. Search does not send material to a model or network service.
 
+## Canvas organization (0.7.0)
+
+- **小地图** shows conversations, file/MCP sources and groups. Drag it to pan or scroll to zoom; its toolbar button shows or hides it for the current board view.
+- **自动布局** arranges the current board from inputs to outputs, using the rendered card sizes (including expanded replies). Group members stay together. Layout changes only positions and can be undone.
+- Select nodes with ⌘/Shift-click or Shift-drag, then choose **分组 → 创建分组** or **加入…**. Groups can contain conversations and source nodes. Click a group title to rename it, drag its title bar to move every member, or choose **解散** to keep the nodes without the frame. Group membership is saved in the canvas file and does not add model context.
+- **↶ / ↷**, **⌘Z / ⇧⌘Z** undo or redo node moves, layout, connections, group membership, group names and dissolution. A group move is one edit. Each board keeps up to 100 edits during the current app launch; switching boards keeps their separate histories. Text fields keep their normal text undo. Model runs, replies, source contents and viewport navigation remain independent of canvas edit history. Creating or deleting nodes starts a new edit history for that board; local record deletion still requires confirmation and is not restored by canvas undo.
+
 ## Chat bubbles, files, export and dictation (0.3.0)
 
 Private chats and Plaza discussions use right-aligned user bubbles and left-aligned agent bubbles. Input supports the **附件** button and file drops; each conversation keeps its own pending selection. Files are copied into `Attachments/<UUID>/` under the app data directory and referenced by relative paths in saved history. Originals outside the app are not changed.

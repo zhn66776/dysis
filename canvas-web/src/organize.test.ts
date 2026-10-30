@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { canvasHistoryAction, groupBounds, previewLayout } from './organize'
+import { canvasHistoryAction, groupBounds, previewLayout, stableSelection } from './organize'
 import { createMockHost } from './mock'
 import type { Incoming, StatePayload } from './types'
 
@@ -11,6 +11,13 @@ describe('canvas organization', () => {
       { id: 'b', position: { x: 500, y: 300 }, data: {}, measured: { width: 240, height: 160 } },
     ])).toEqual({ x: 76, y: 72, width: 688, height: 572 })
     expect(groupBounds(g, [])).toBeNull()
+  })
+
+  it('keeps repeated multi-selection reports stable after node measurements', () => {
+    const previous = ['a', 'b']
+    expect(stableSelection(previous, ['a', 'b'])).toBe(previous)
+    expect(stableSelection(previous, ['b', 'a'])).toBe(previous)
+    expect(stableSelection(previous, ['a', 'c'])).toEqual(['a', 'c'])
   })
 
   it('routes undo shortcuts to the canvas only when an editor or modal does not own them', () => {

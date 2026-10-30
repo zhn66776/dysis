@@ -12,6 +12,11 @@ export function groupBounds(group: CanvasGroup, nodes: Node[]) {
   }
 }
 
+/** React Flow can report the same selection again after node measurement. */
+export function stableSelection(previous: string[], next: string[]) {
+  return previous.length === next.length && next.every(id => previous.includes(id)) ? previous : next
+}
+
 /** Text editing shortcuts belong to the focused editor; canvas shortcuts act on the board. */
 export function canvasHistoryAction(key: string, modifier: boolean, shift: boolean, editing: boolean, modal: boolean) {
   if (!modifier || editing || modal || key.toLowerCase() !== 'z') return null

@@ -106,4 +106,29 @@ final class CanvasOrganizationTests: XCTestCase {
         XCTAssertFalse(history.redo(&b))
         XCTAssertEqual(b.nodes.map(\.sessionID), before.nodes.map(\.sessionID))
     }
+
+    func testOrganizingSourcesPreservesNewContentWhileUndoingLayout() throws {
+        var b = board(1), history = CanvasEditHistory()
+        let result = CanvasMCPResult(serverID: UUID(), serverName: "local", toolName: "read", argumentsJSON: "{}", text: "first")
+        b.nodes.append(.source(.mcp(result), position: .init(x: 700, y: 0)))
+        let sourceID = b.nodes[1].id
+        try b.connect(source: sourceID, target: b.nodes[0].id)
+        b.group(nodeIDs: Set(b.nodes.map(\.id)))
+        let before = b
+        let layout = CanvasLayout.positions(board: b, sizes: [])
+        for i in b.nodes.indices { b.nodes[i].position = layout[b.nodes[i].id]! }
+        history.record(before: before, after: b, label: "layout")
+        var updated = result; updated.text = "refreshed"
+        b.nodes[1].source?.setMCP(updated)
+        let newVersion = b.nodes[1].source?.version
+        b.edges[0].lastDeliveredMessageID = newVersion
+        XCTAssertTrue(history.undo(&b))
+        XCTAssertEqual(b.nodes[1].position, before.nodes[1].position)
+        XCTAssertEqual(b.nodes[1].source?.mcp?.text, "refreshed")
+        XCTAssertEqual(b.nodes[1].source?.version, newVersion)
+        XCTAssertEqual(b.edges[0].lastDeliveredMessageID, newVersion)
+        let restored = try JSONDecoder().decode(CanvasBoard.self, from: JSONEncoder().encode(b))
+        XCTAssertEqual(restored.nodes[1].source, b.nodes[1].source)
+        XCTAssertEqual(restored.groups, b.groups)
+    }
 }
