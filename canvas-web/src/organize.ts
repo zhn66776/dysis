@@ -28,6 +28,15 @@ export function previewLayout(board: BoardPayload, sizes: NodeSize[]) {
   const measured = new Map(sizes.map(s => [s.nodeID, s]))
   const dimensions = new Map(board.nodes.map(n => [n.id, measured.get(n.id) ?? { width: 240, height: 160 }]))
   const place = (ids: string[], links: [string, string][], dims: Map<string, { width: number; height: number }>) => {
+    if (!ids.length) return new Map<string, {x: number; y: number}>()
+    const valid = new Set(ids)
+    links = links.filter(([a, b]) => valid.has(a) && valid.has(b) && a !== b)
+    if (!links.length) {
+      const columns = Math.min(4, Math.ceil(Math.sqrt(ids.length))), rows = Math.ceil(ids.length / columns)
+      const widths = Array<number>(columns).fill(0), heights = Array<number>(rows).fill(0)
+      ids.forEach((id, i) => { const d = dims.get(id)!; widths[i % columns] = Math.max(widths[i % columns], d.width); heights[Math.floor(i / columns)] = Math.max(heights[Math.floor(i / columns)], d.height) })
+      return new Map(ids.map((id, i) => [id, { x: widths.slice(0, i % columns).reduce((a, b) => a + b, 0) + (i % columns) * 100, y: heights.slice(0, Math.floor(i / columns)).reduce((a, b) => a + b, 0) + Math.floor(i / columns) * 64 }]))
+    }
     const pending = new Set(ids), rank = new Map(ids.map(id => [id, 0])), order: string[] = []
     while (pending.size) {
       const next = ids.find(id => pending.has(id) && !links.some(([a, b]) => b === id && pending.has(a))) ?? ids.find(id => pending.has(id))!

@@ -65,6 +65,16 @@ final class CanvasOrganizationTests: XCTestCase {
         XCTAssertTrue(CanvasLayout.positions(board: board(0), sizes: []).isEmpty)
     }
 
+    func testIndependentNodesUseReadableGridWithMeasuredRowHeights() {
+        let b = board(9)
+        let ids = b.nodes.map(\.id)
+        let p = CanvasLayout.positions(board: b, sizes: [.init(nodeID: ids[0], width: 320, height: 500)])
+        XCTAssertEqual(p[ids[0]]?.y, p[ids[2]]?.y)
+        XCTAssertGreaterThan(p[ids[1]]!.x, p[ids[0]]!.x + 320)
+        XCTAssertGreaterThan(p[ids[3]]!.y, p[ids[0]]!.y + 500)
+        XCTAssertLessThan(p.values.map(\.y).max()!, 1200)
+    }
+
     func testUndoRedoPreservesLiveDeliveryStateAndViewportAcrossLayoutEdits() throws {
         var b = board(2), history = CanvasEditHistory()
         let ids = b.nodes.map(\.id), empty = b

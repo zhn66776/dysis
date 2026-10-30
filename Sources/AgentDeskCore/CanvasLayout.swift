@@ -49,15 +49,32 @@ public enum CanvasLayout {
     }
 
     private static func place(ids: [UUID], edges: [(UUID, UUID)], sizes: [UUID: CanvasPoint]) -> [UUID: CanvasPoint] {
+        guard !ids.isEmpty else { return [:] }
+        let valid = Set(ids)
+        let links = edges.filter { valid.contains($0.0) && valid.contains($0.1) && $0.0 != $0.1 }
+        if links.isEmpty {
+            let columns = min(CanvasBoard.gridColumns, Int(ceil(sqrt(Double(ids.count)))))
+            let rows = (ids.count + columns - 1) / columns
+            var widths = Array(repeating: 0.0, count: columns), heights = Array(repeating: 0.0, count: rows)
+            for (i, id) in ids.enumerated() {
+                let size = sizes[id] ?? .init(x: 240, y: 160)
+                widths[i % columns] = max(widths[i % columns], size.x)
+                heights[i / columns] = max(heights[i / columns], size.y)
+            }
+            return Dictionary(uniqueKeysWithValues: ids.enumerated().map { i, id in
+                (id, CanvasPoint(x: widths.prefix(i % columns).reduce(0, +) + Double(i % columns) * 100,
+                                 y: heights.prefix(i / columns).reduce(0, +) + Double(i / columns) * 64))
+            })
+        }
         var remaining = Set(ids), rank = Dictionary(uniqueKeysWithValues: ids.map { ($0, 0) })
         var ordered: [UUID] = []
         while !remaining.isEmpty {
             // Grouping an acyclic graph can create a cycle between groups. Break ties
             // in stored order so those groups still get a stable, non-overlapping layout.
-            guard let next = ids.first(where: { id in remaining.contains(id) && !edges.contains { $0.1 == id && remaining.contains($0.0) } })
+            guard let next = ids.first(where: { id in remaining.contains(id) && !links.contains { $0.1 == id && remaining.contains($0.0) } })
                     ?? ids.first(where: { remaining.contains($0) }) else { break }
             remaining.remove(next); ordered.append(next)
-            for (source, target) in edges where source == next && remaining.contains(target) {
+            for (source, target) in links where source == next && remaining.contains(target) {
                 rank[target] = max(rank[target] ?? 0, (rank[next] ?? 0) + 1)
             }
         }

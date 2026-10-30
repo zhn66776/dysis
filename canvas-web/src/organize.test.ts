@@ -58,6 +58,6 @@ describe('canvas organization', () => {
     const positions = previewLayout({ id: 'b', title: 'b', nodes: ['a', 'b', 'c'].map(node), edges: [{ id: 'e', kind: 'data', source: 'a', target: 'b' }], groups: [{ id: 'g', title: 'g', nodeIDs: ['a', 'b'] }] }, [{ nodeID: 'a', width: 320, height: 500 }])
     expect(positions).toHaveLength(3)
     expect(positions.find(n => n.nodeID === 'b')!.x).toBeGreaterThan(positions.find(n => n.nodeID === 'a')!.x + 320)
-    expect(positions.find(n => n.nodeID === 'c')!.y).toBeGreaterThan(positions.find(n => n.nodeID === 'a')!.y + 500)
+    expect(positions.find(n => n.nodeID === 'c')!.x).toBeGreaterThan(positions.find(n => n.nodeID === 'b')!.x + 240)
   })
 })
