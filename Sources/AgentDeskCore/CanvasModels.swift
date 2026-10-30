@@ -177,9 +177,36 @@ public enum CanvasError: LocalizedError, Equatable, Sendable {
     }
 }
 
+/// A folder on disk that a board's conversations work in, like a project
+/// opened in an editor. Once trusted, every conversation on the board may
+/// write files and run commands (with network) there.
+public struct CanvasProject: Codable, Equatable, Sendable {
+    public var path: String
+    /// nil until asked; false when the user chose to only chat.
+    public var trusted: Bool?
+    public init(path: String, trusted: Bool? = nil) { self.path = path; self.trusted = trusted }
+    public var name: String { URL(fileURLWithPath: path).lastPathComponent }
+    public var isTrusted: Bool { trusted == true }
+
+    public static var defaultRoot: URL {
+        FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("AgentDesk Projects", isDirectory: true)
+    }
+
+    /// A new, empty folder under `root` named after `title` (with a number when taken).
+    public static func makeFolder(title: String, root: URL = defaultRoot) throws -> URL {
+        let cleaned = title.replacingOccurrences(of: "/", with: "-").replacingOccurrences(of: ":", with: "-").trimmingCharacters(in: .whitespacesAndNewlines)
+        let base = cleaned.isEmpty || cleaned.hasPrefix(".") ? "新项目" : String(cleaned.prefix(80))
+        var url = root.appendingPathComponent(base, isDirectory: true), n = 2
+        while FileManager.default.fileExists(atPath: url.path) { url = root.appendingPathComponent("\(base) \(n)", isDirectory: true); n += 1 }
+        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        return url
+    }
+}
+
 public struct CanvasBoard: Identifiable, Codable, Equatable, Sendable {
     public var id: UUID
     public var title: String
+    public var project: CanvasProject?
     public var nodes: [CanvasNode]
     public var edges: [CanvasEdge]
     public var groups: [CanvasGroup]
@@ -187,16 +214,17 @@ public struct CanvasBoard: Identifiable, Codable, Equatable, Sendable {
     public var createdAt: Date
     public var updatedAt: Date
 
-    public init(id: UUID = UUID(), title: String, nodes: [CanvasNode] = [], edges: [CanvasEdge] = [], groups: [CanvasGroup] = [], viewport: CanvasViewport? = nil, createdAt: Date = Date(), updatedAt: Date = Date()) {
-        self.id = id; self.title = title; self.nodes = nodes; self.edges = edges; self.viewport = viewport
+    public init(id: UUID = UUID(), title: String, project: CanvasProject? = nil, nodes: [CanvasNode] = [], edges: [CanvasEdge] = [], groups: [CanvasGroup] = [], viewport: CanvasViewport? = nil, createdAt: Date = Date(), updatedAt: Date = Date()) {
+        self.id = id; self.title = title; self.project = project; self.nodes = nodes; self.edges = edges; self.viewport = viewport
         self.groups = groups
         self.createdAt = createdAt; self.updatedAt = updatedAt
     }
 
-    private enum CodingKeys: String, CodingKey { case id, title, nodes, edges, groups, viewport, createdAt, updatedAt }
+    private enum CodingKeys: String, CodingKey { case id, title, project, nodes, edges, groups, viewport, createdAt, updatedAt }
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         self.init(id: try c.decode(UUID.self, forKey: .id), title: try c.decode(String.self, forKey: .title),
+                  project: try c.decodeIfPresent(CanvasProject.self, forKey: .project),
                   nodes: try c.decode([CanvasNode].self, forKey: .nodes), edges: try c.decode([CanvasEdge].self, forKey: .edges),
                   groups: try c.decodeIfPresent([CanvasGroup].self, forKey: .groups) ?? [],
                   viewport: try c.decodeIfPresent(CanvasViewport.self, forKey: .viewport),

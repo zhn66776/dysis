@@ -5,7 +5,9 @@ export type Provider = 'claude' | 'codex' | 'grok' | 'gemini'
 export type SessionState = 'empty' | 'running' | 'complete' | 'failed' | 'cancelled'
 export type MessageState = 'complete' | 'streaming' | 'failed' | 'cancelled'
 
-export interface BoardSummary { id: string; title: string; nodeCount: number }
+/** A board's project folder; trusted is null until asked. */
+export interface BoardProject { path: string; name: string; trusted: boolean | null; missing: boolean }
+export interface BoardSummary { id: string; title: string; nodeCount: number; project?: BoardProject | null }
 
 export interface NodePayload {
   id: string
@@ -154,6 +156,8 @@ export type Command =
   | { type: 'board.select'; boardID: string }
   | { type: 'board.rename'; boardID: string; title: string }
   | { type: 'board.delete'; boardID: string }
+  | { type: 'board.linkFolder' | 'board.reveal'; boardID: string }
+  | { type: 'board.trust'; boardID: string; ok: boolean }
   | { type: 'node.create'; boardID: string; provider: Provider; x: number; y: number; connectFrom?: string }
   | { type: 'node.move'; boardID: string; positions: { nodeID: string; x: number; y: number }[] }
   | { type: 'node.delete'; boardID: string; nodeIDs: string[] }

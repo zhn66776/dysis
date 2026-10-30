@@ -88,11 +88,55 @@ final class CanvasModel: ObservableObject {
 
     // MARK: Boards
 
+    /// Asks whether the board is a project folder (new or existing) or a plain board.
     func createBoard() {
-        let board = CanvasBoard(title: "新画布")
-        library.boards.insert(board, at: 0)
-        library.selectedBoardID = board.id
-        persist()
+        Task { @MainActor in
+            guard let choice = await ProjectDialogs.newBoard() else { return }
+            let board: CanvasBoard
+            do {
+                switch choice {
+                case .plain: board = CanvasBoard(title: "新画布")
+                case .newFolder(let name):
+                    let folder = try CanvasProject.makeFolder(title: name)
+                    board = CanvasBoard(title: folder.lastPathComponent, project: CanvasProject(path: folder.path))
+                case .existing(let folder):
+                    board = CanvasBoard(title: folder.lastPathComponent, project: CanvasProject(path: folder.path))
+                }
+            } catch { app.errorMessage = "无法新建项目文件夹：\(error.localizedDescription)"; return }
+            library.boards.insert(board, at: 0)
+            library.selectedBoardID = board.id
+            persist()
+        }
+    }
+
+    /// Links a folder to an existing board; conversations already on it keep their own folders.
+    func linkFolder(_ boardID: UUID) {
+        guard let folder = ProjectDialogs.chooseFolder() else { return }
+        update(boardID) { $0.project = CanvasProject(path: folder.path) }
+    }
+
+    func setTrust(_ boardID: UUID, trusted: Bool) {
+        update(boardID) { $0.project?.trusted = trusted }
+    }
+
+    /// The trust question comes once per project, before its first conversation.
+    private func askTrustIfNeeded(_ boardID: UUID, then work: @escaping () -> Void) {
+        guard let project = library.boards.first(where: { $0.id == boardID })?.project, project.trusted == nil else { work(); return }
+        Task { @MainActor in
+            let trusted = await ProjectDialogs.askTrust(project)
+            self.setTrust(boardID, trusted: trusted)
+            work()
+        }
+    }
+
+    /// A conversation for this board, working in its project folder when it has one.
+    private func newSession(on boardID: UUID, provider: ProviderID, copying source: ChatSession? = nil) -> UUID? {
+        let folder = library.boards.first(where: { $0.id == boardID })?.project.map { URL(fileURLWithPath: $0.path, isDirectory: true) }
+        if let folder, !FileManager.default.fileExists(atPath: folder.path) {
+            app.errorMessage = "项目文件夹不存在：\(folder.path)。请在侧栏重新选择文件夹。"
+            return nil
+        }
+        return app.newSession(provider: provider, copyingSettingsFrom: source, workingDirectory: folder)
     }
 
     func selectBoard(_ id: UUID) {
@@ -130,7 +174,11 @@ final class CanvasModel: ObservableObject {
     // MARK: Nodes and edges
 
     func createNode(boardID: UUID, provider: ProviderID, at point: CanvasPoint, connectFrom: UUID?) {
-        guard currentBoard?.id == boardID, let sessionID = app.newSession(provider: provider) else { return }
+        askTrustIfNeeded(boardID) { [weak self] in self?.placeNode(boardID: boardID, provider: provider, at: point, connectFrom: connectFrom) }
+    }
+
+    private func placeNode(boardID: UUID, provider: ProviderID, at point: CanvasPoint, connectFrom: UUID?) {
+        guard currentBoard?.id == boardID, let sessionID = newSession(on: boardID, provider: provider) else { return }
         let node = CanvasNode(sessionID: sessionID, position: point)
         update(boardID) { board in
             board.nodes.append(node)
@@ -205,7 +253,7 @@ final class CanvasModel: ObservableObject {
         guard let board = library.boards.first(where: { $0.id == boardID }), let parent = board.node(nodeID),
               let parentSession = sessionsByID[parent.sessionID],
               parentSession.messages.contains(where: { $0.id == messageID }),
-              let sessionID = app.newSession(provider: parentSession.provider, copyingSettingsFrom: parentSession) else { return }
+              let sessionID = newSession(on: boardID, provider: parentSession.provider, copying: parentSession) else { return }
         app.renameSession(sessionID, title: "分支 · \(parentSession.title)")
         let node = CanvasNode(sessionID: sessionID, position: board.freePosition(near: CanvasPoint(x: parent.position.x + 440, y: parent.position.y)))
         update(boardID) { board in
@@ -220,7 +268,7 @@ final class CanvasModel: ObservableObject {
         guard let board = library.boards.first(where: { $0.id == boardID }), let parent = board.node(nodeID),
               let source = sessionsByID[parent.sessionID],
               source.messages.contains(where: { $0.id == messageID && $0.role == .assistant && $0.state == .complete && !$0.text.isEmpty }),
-              let sessionID = app.newSession(provider: source.provider, copyingSettingsFrom: source) else { return }
+              let sessionID = newSession(on: boardID, provider: source.provider, copying: source) else { return }
         app.renameSession(sessionID, title: "引用 · \(source.title)")
         let node = CanvasNode(sessionID: sessionID, position: board.freePosition(near: .init(x: parent.position.x + 440, y: parent.position.y)))
         update(boardID) { board in
@@ -238,7 +286,7 @@ final class CanvasModel: ObservableObject {
         let sources = nodeIDs.compactMap { board.node($0) }.filter { !$0.isSource }
         guard sources.count >= 2 else { app.errorMessage = "至少选择两个节点才能合流。"; return }
         guard sources.count <= 8 else { app.errorMessage = "一次最多合并 8 个节点。"; return }
-        guard let sessionID = app.newSession(provider: provider) else { return }
+        guard let sessionID = newSession(on: boardID, provider: provider) else { return }
         app.renameSession(sessionID, title: "合流 · \(template.title)")
         let x = (sources.map(\.position.x).max() ?? 0) + 340
         let y = sources.map(\.position.y).reduce(0, +) / Double(sources.count)
@@ -422,7 +470,7 @@ final class CanvasModel: ObservableObject {
         let draftImages = app.attachmentDrafts.files[node.sessionID, default: []].filter(\.isImage).count
         let context = CanvasContextBuilder.context(board: board, nodeID: nodeID, sessions: sessionsByID,
                                                    imageBudget: CanvasContextBuilder.maxImagesPerTurn - draftImages)
-        guard app.send(text, to: node.sessionID, context: context) else { return false }
+        guard app.send(text, to: node.sessionID, context: context, project: board.project) else { return false }
         if context.fork != nil, let edge = board.inheritEdge(into: nodeID) { pendingForks[node.sessionID] = (boardID, edge.id) }
         // Each upstream reply and source version is delivered once; a new one makes the edge pending again.
         let delivered = context.deliveries
