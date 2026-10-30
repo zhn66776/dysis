@@ -20,6 +20,22 @@ export interface NodePayload {
   stale: boolean
   /** How many nodes a downstream re-run from here would call. */
   downstream: number
+  /** Files and MCP result nodes: read-only material, only ever a data-edge source. */
+  source?: SourcePayload
+}
+
+export type FileKind = 'image' | 'pdf' | 'document' | 'text'
+
+export interface SourceFile { id: string; name: string; kind: FileKind; bytes: number; note?: string }
+
+export interface SourcePayload {
+  kind: 'files' | 'mcp'
+  title: string
+  updatedAt: number
+  /** Files are being copied and read. */
+  importing: boolean
+  files: SourceFile[]
+  mcp?: { serverName: string; toolName: string; arguments: string; text: string; isError: boolean; calledAt: number }
 }
 
 export type MergeTemplate = 'compare' | 'summarize' | 'critique'
@@ -66,7 +82,7 @@ export interface SessionSummary {
 export interface ModelOption { id: string; key: string; label: string }
 export interface QuotaWindow { label: string; usedPercent: number; resetsAt?: number }
 export interface Quota { windows: QuotaWindow[]; status?: string; updatedAt: number }
-export interface DraftFile { id: string; name: string; kind: 'image' | 'pdf' | 'document' | 'text'; bytes: number }
+export interface DraftFile { id: string; name: string; kind: FileKind; bytes: number }
 export interface Draft { sessionID: string; files: DraftFile[]; importing: boolean }
 
 export interface MessagePayload {
@@ -145,6 +161,11 @@ export type Command =
   | { type: 'chain.stop' }
   | { type: 'confirm.answer'; id: string; ok: boolean }
   | { type: 'chrome.regions'; drag: Region[]; noDrag: Region[] }
+  | { type: 'source.createFiles'; boardID: string; x: number; y: number }
+  | { type: 'source.addFiles'; boardID: string; nodeID: string }
+  | { type: 'source.removeFile'; boardID: string; nodeID: string; attachmentID: string }
+  | { type: 'source.rename'; boardID: string; nodeID: string; title: string }
+  | { type: 'source.rerunMCP'; boardID: string; nodeID: string }
 
 export interface AppState {
   ready: boolean

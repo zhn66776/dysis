@@ -146,7 +146,7 @@ final class AppModel: ObservableObject {
     }
 
     /// Starts one provider turn. `context` is the canvas material (replayed
-    /// branch history, upstream outputs) placed before the typed text, and its
+    /// branch history, upstream outputs, source nodes) placed before the typed text, and its
     /// `fork` makes a not-yet-started session fork natively from its parent.
     /// Returns whether the turn started.
     @discardableResult
@@ -178,7 +178,8 @@ final class AppModel: ObservableObject {
             errorMessage = "当前 Cursor 连接暂不支持图片输入。请选择 Claude 或 ChatGPT，或移除图片后发送文档文字。"
             return false
         }
-        let images = attachments.filter(\.isImage).map { AgentImageInput(localURL: $0.modelURL(root: dataRoot) ?? $0.storedURL(root: dataRoot), mediaType: $0.modelMediaType ?? $0.mediaType) }
+        // Source-node images were already routed and capped by CanvasContextBuilder (none for Cursor).
+        let images = (attachments.filter(\.isImage) + context.images).map { AgentImageInput(localURL: $0.modelURL(root: dataRoot) ?? $0.storedURL(root: dataRoot), mediaType: $0.modelMediaType ?? $0.mediaType) }
         let withContext = CanvasContextBuilder.compose(userText: prompt, context: context)
         let input = AttachmentPromptBuilder.compose(userText: withContext, attachments: attachments, root: dataRoot, maxCharacters: context.isEmpty ? 48_000 : 56_000)
         if sessions[index].messages.isEmpty {

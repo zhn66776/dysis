@@ -6,6 +6,7 @@ import {
 } from '@xyflow/react'
 import { send } from './bridge'
 import { ChatNode, type ChatFlowNode } from './ChatNode'
+import { SourceNode, type SourceFlowNode } from './SourceNode'
 import { Dropdown } from './Controls'
 import { ProviderMark, providerColor, providerName, providers } from './providers'
 import type { AppState, MergeTemplate, Provider } from './types'
@@ -16,7 +17,9 @@ const templates: { id: MergeTemplate; label: string; hint: string }[] = [
   { id: 'critique', label: '挑错', hint: '找错误、漏洞和风险，按严重程度排序' },
 ]
 
-const nodeTypes = { chat: ChatNode }
+const nodeTypes = { chat: ChatNode, source: SourceNode }
+
+type FlowNode = ChatFlowNode | SourceFlowNode
 
 interface Menu { clientX: number; clientY: number; connectFrom?: string }
 
@@ -24,7 +27,7 @@ export function Canvas({ state, selectedNodeID, onSelect }: { state: AppState; s
   const board = state.board!
   const flow = useReactFlow()
   const wrapper = useRef<HTMLDivElement>(null)
-  const [nodes, setNodes] = useState<ChatFlowNode[]>([])
+  const [nodes, setNodes] = useState<FlowNode[]>([])
   const [edges, setEdges] = useState<Edge[]>([])
   const [menu, setMenu] = useState<Menu | null>(null)
   const [mergeProvider, setMergeProvider] = useState<Provider>('claude')
@@ -39,19 +42,24 @@ export function Canvas({ state, selectedNodeID, onSelect }: { state: AppState; s
   useEffect(() => {
     setNodes(prev => {
       const old = new Map(prev.map(n => [n.id, n]))
-      return board.nodes.map(n => {
+      return board.nodes.map((n): FlowNode => {
         const p = old.get(n.id)
         // Keep React Flow's own fields (measured size) so edges stay drawn.
-        return {
+        const base = {
           ...p,
-          id: n.id, type: 'chat',
+          id: n.id,
           position: p?.dragging ? p.position : { x: n.x, y: n.y },
           selected: p ? p.selected : n.id === selectedNodeID,
+        }
+        const onDownstream = () => send({ type: 'chain.downstream', boardID: board.id, nodeID: n.id })
+        if (n.source) return { ...base, type: 'source', data: { source: n.source, downstream: n.downstream, onDownstream } }
+        return {
+          ...base, type: 'chat',
           data: {
             summary: state.summaries[n.sessionID], inherited: Boolean(n.inherited), nativeFork: n.inherited?.mode === 'native',
             merge: n.merge, stale: n.stale, downstream: n.downstream, chainCurrent: runningChain?.currentNodeID === n.id,
             picked: picked.includes(n.id),
-            onDownstream: () => send({ type: 'chain.downstream', boardID: board.id, nodeID: n.id }),
+            onDownstream,
           },
         }
       })
@@ -68,13 +76,40 @@ export function Canvas({ state, selectedNodeID, onSelect }: { state: AppState; s
     if (target) window.setTimeout(() => flow.setCenter(target.x + 120, target.y + 65, { zoom: flow.getZoom(), duration: 300 }), 80)
   }, [focus])
 
-  const selectedIDs = picked.filter(id => board.nodes.some(n => n.id === id && state.summaries[n.sessionID]))
+  // Only conversations can be merged; files and MCP nodes stay upstream.
+  const selectedIDs = picked.filter(id => board.nodes.some(n => n.id === id && !n.source && state.summaries[n.sessionID]))
   const merge = (template: MergeTemplate) => {
     send({ type: 'node.merge', boardID: board.id, nodeIDs: selectedIDs, provider: mergeProvider, template })
     setPicked([])
   }
 
   const sessionOfNode = useMemo(() => new Map(board.nodes.map(n => [n.id, n.sessionID])), [board.nodes])
+  // Files and MCP nodes only feed data edges; they never take one.
+  const sourceIDs = useMemo(() => new Set(board.nodes.filter(n => n.source).map(n => n.id)), [board.nodes])
+
+  // Native asks what is under a file drop (page CSS px) and where the visible
+  // middle is; the page never sees the files themselves.
+  useEffect(() => {
+    const host = window.agentDesk!
+    host.dropTarget = (x, y) => {
+      const el = document.elementFromPoint(x, y)
+      const zone = el?.closest<HTMLElement>('[data-drop]')
+      if (zone?.dataset.drop === 'panel') return { kind: 'panel' }
+      if (zone?.dataset.drop === 'source') return { kind: 'source', nodeID: zone.dataset.nodeId }
+      const nodeID = el?.closest<HTMLElement>('.react-flow__node')?.dataset.id
+      if (nodeID && board.nodes.find(n => n.id === nodeID)?.source?.kind === 'files') return { kind: 'source', nodeID }
+      if (!el?.closest('.canvas')) return { kind: 'none' }
+      const p = flow.screenToFlowPosition({ x, y })
+      return { kind: 'canvas', x: Math.round(p.x - 120), y: Math.round(p.y - 40) }
+    }
+    host.viewCenter = () => {
+      const r = wrapper.current?.getBoundingClientRect()
+      if (!r) return null
+      const p = flow.screenToFlowPosition({ x: r.left + r.width / 2, y: r.top + r.height / 2 })
+      return { x: Math.round(p.x - 120), y: Math.round(p.y - 65) }
+    }
+    return () => { delete host.dropTarget; delete host.viewCenter }
+  }, [board.nodes, flow])
 
   useEffect(() => {
     setEdges(prev => {
@@ -97,7 +132,7 @@ export function Canvas({ state, selectedNodeID, onSelect }: { state: AppState; s
     })
   }, [board.edges, state.summaries, state.running, sessionOfNode])
 
-  const onNodesChange = useCallback((changes: NodeChange<ChatFlowNode>[]) => {
+  const onNodesChange = useCallback((changes: NodeChange<FlowNode>[]) => {
     // Removal goes through Swift (native confirmation); apply the rest locally.
     setNodes(ns => applyNodeChanges(changes.filter(c => c.type !== 'remove'), ns))
   }, [])
@@ -105,7 +140,7 @@ export function Canvas({ state, selectedNodeID, onSelect }: { state: AppState; s
     setEdges(es => applyEdgeChanges(changes.filter(c => c.type !== 'remove'), es))
   }, [])
 
-  const onBeforeDelete: OnBeforeDelete<ChatFlowNode> = useCallback(async ({ nodes: ns, edges: es }) => {
+  const onBeforeDelete: OnBeforeDelete<FlowNode> = useCallback(async ({ nodes: ns, edges: es }) => {
     const nodeIDs = ns.map(n => n.id)
     const edgeIDs = es.filter(e => !nodeIDs.includes(e.source) && !nodeIDs.includes(e.target)).map(e => e.id)
     if (nodeIDs.length) send({ type: 'node.delete', boardID: board.id, nodeIDs })
@@ -129,6 +164,12 @@ export function Canvas({ state, selectedNodeID, onSelect }: { state: AppState; s
     if (!menu) return
     const p = flow.screenToFlowPosition({ x: menu.clientX, y: menu.clientY })
     send({ type: 'node.create', boardID: board.id, provider, x: Math.round(p.x), y: Math.round(p.y - 40), connectFrom: menu.connectFrom })
+    setMenu(null)
+  }
+  const createFiles = () => {
+    if (!menu) return
+    const p = flow.screenToFlowPosition({ x: menu.clientX, y: menu.clientY })
+    send({ type: 'source.createFiles', boardID: board.id, x: Math.round(p.x), y: Math.round(p.y - 40) })
     setMenu(null)
   }
 
@@ -157,7 +198,7 @@ export function Canvas({ state, selectedNodeID, onSelect }: { state: AppState; s
         onBeforeDelete={onBeforeDelete}
         onConnect={c => send({ type: 'edge.create', boardID: board.id, source: c.source, target: c.target })}
         onConnectEnd={onConnectEnd}
-        isValidConnection={c => c.source !== c.target}
+        isValidConnection={c => c.source !== c.target && !sourceIDs.has(c.target)}
         onNodeClick={(e, n) => {
           setMenu(null)
           if (e.metaKey || e.shiftKey || e.ctrlKey) {
@@ -222,7 +263,7 @@ export function Canvas({ state, selectedNodeID, onSelect }: { state: AppState; s
       {board.nodes.length === 0 && (
         <div className="canvas-empty">
           <div className="empty-title">从一个节点开始</div>
-          <div>双击空白处，或点右上角“新节点”。一个节点就是一段对话。</div>
+          <div>双击空白处，或点右上角“新节点”。一个节点就是一段对话；把文件拖到这里会变成文件节点。</div>
         </div>
       )}
 
@@ -234,6 +275,15 @@ export function Canvas({ state, selectedNodeID, onSelect }: { state: AppState; s
               <ProviderMark provider={p} size={16} />{providerName[p]}
             </button>
           ))}
+          {!menu.connectFrom && (
+            <>
+              <div className="menu-label menu-sep">只读资料（用数据线连到多个对话）</div>
+              <button className="menu-item" onClick={createFiles}><span className="source-kind">文件</span>文件…</button>
+              <button className="menu-item" title="在 MCP 工作台运行工具，再选“放到画布上”" onClick={() => { send({ type: 'app.open', window: 'mcp' }); setMenu(null) }}>
+                <span className="source-kind">MCP</span>MCP 结果…
+              </button>
+            </>
+          )}
         </div>
       )}
     </div>

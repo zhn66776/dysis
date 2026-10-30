@@ -6,6 +6,7 @@ import { ChatPanel } from './ChatPanel'
 import { ConfirmDialog } from './ConfirmDialog'
 import { applyChrome } from './chrome'
 import { Sidebar } from './Sidebar'
+import { SourcePanel } from './SourcePanel'
 import { applyState, enqueueConfirm, initialState, resolveConfirm } from './store'
 import type { AppState, ConfirmShow, StatePayload } from './types'
 
@@ -75,7 +76,8 @@ export function App() {
           </ReactFlowProvider>
         )}
       </main>
-      {node && (
+      {node?.source && <SourcePanel key={node.id} state={state} node={node} source={node.source} onClose={() => setSelectedNodeID(null)} />}
+      {node && !node.source && (
         <ChatPanel
           key={node.id}
           state={state}

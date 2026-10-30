@@ -24,6 +24,26 @@ struct BridgeNode: Encodable, Equatable {
     let stale: Bool
     /// Nodes a downstream re-run from here would call.
     let downstream: Int
+    /// Files and MCP result nodes; nil for chat nodes.
+    let source: BridgeSource?
+}
+
+struct BridgeSource: Encodable, Equatable {
+    struct File: Encodable, Equatable { let id: UUID; let name: String; let kind: String; let bytes: Int64; let note: String? }
+    struct MCP: Encodable, Equatable {
+        let serverName: String, toolName: String, arguments: String, text: String, isError: Bool, calledAt: Double
+    }
+    /// "files" or "mcp".
+    let kind: String
+    let title: String, updatedAt: Double, importing: Bool
+    let files: [File]
+    let mcp: MCP?
+
+    init(_ s: CanvasSource, importing: Bool) {
+        kind = s.kind.rawValue; title = s.title; updatedAt = s.updatedAt.timeIntervalSince1970 * 1000; self.importing = importing
+        files = s.files.map { File(id: $0.id, name: $0.displayName, kind: $0.kind.rawValue, bytes: $0.byteCount, note: $0.extractionNote) }
+        mcp = s.mcp.map { MCP(serverName: $0.serverName, toolName: $0.toolName, arguments: $0.argumentsJSON, text: $0.text, isError: $0.isError, calledAt: $0.calledAt.timeIntervalSince1970 * 1000) }
+    }
 }
 
 struct BridgeChain: Encodable, Equatable {
@@ -155,7 +175,7 @@ enum BridgeEncoding {
                       actualModels: m.actualModelIDs, attachments: m.attachments?.map(\.displayName), contextSources: m.contextSources)
     }
 
-    static func board(_ b: CanvasBoard, sessions: [UUID: ChatSession], running: Set<UUID>) -> BridgeBoard {
+    static func board(_ b: CanvasBoard, sessions: [UUID: ChatSession], running: Set<UUID>, importing: Set<UUID> = []) -> BridgeBoard {
         let stale = CanvasContextBuilder.staleNodes(board: b, sessions: sessions, running: running)
         let ran = { (n: CanvasNode) in CanvasContextBuilder.hasRun(sessions[n.sessionID]) }
         let nodes = b.nodes.map { n -> BridgeNode in
@@ -172,9 +192,10 @@ enum BridgeEncoding {
             return BridgeNode(id: n.id, sessionID: n.sessionID, x: n.position.x, y: n.position.y, inherited: inherited,
                               merge: n.merge?.title, stale: stale.contains(n.id),
                               // Offer a re-run only when a direct downstream node is behind this one.
-                              downstream: b.edges.contains { $0.kind == .data && $0.source == n.id && stale.contains($0.target) } ? b.downstreamOrder(from: n.id, include: ran).count : 0)
+                              downstream: b.edges.contains { $0.kind == .data && $0.source == n.id && stale.contains($0.target) } ? b.downstreamOrder(from: n.id, include: ran).count : 0,
+                              source: n.source.map { BridgeSource($0, importing: importing.contains(n.id)) })
         }
-        let pending = Set(b.nodes.flatMap { CanvasContextBuilder.pendingUpstream(board: b, nodeID: $0.id, sessions: sessions).map(\.edgeID) })
+        let pending = b.nodes.reduce(into: Set<UUID>()) { $0.formUnion(CanvasContextBuilder.pendingEdges(board: b, nodeID: $1.id, sessions: sessions)) }
         let edges = b.edges.map { BridgeEdge(id: $0.id, kind: $0.kind, source: $0.source, target: $0.target, pending: $0.kind == .data ? pending.contains($0.id) : nil) }
         return BridgeBoard(id: b.id, title: b.title, nodes: nodes, edges: edges, viewport: b.viewport)
     }
@@ -186,6 +207,8 @@ final class CanvasBridge: NSObject, ObservableObject, WKScriptMessageHandler {
     let canvas: CanvasModel
     weak var webView: WKWebView?
     var openWindow: (String, UUID?) -> Void = { _, _ in }
+    /// Opens the MCP workbench to run an MCP node's tool again: (board, node).
+    var openMCPRefresh: (UUID, UUID) -> Void = { _, _ in }
 
     private var ready = false
     private var scheduled = false
@@ -219,11 +242,43 @@ final class CanvasBridge: NSObject, ObservableObject, WKScriptMessageHandler {
         app.attachmentDrafts.objectWillChange.sink { [weak self] in self?.schedulePush() }.store(in: &observers)
     }
 
-    /// Files dropped on the window go to the open panel's conversation.
-    func dropFiles(_ urls: [URL]) -> Bool {
-        guard let id = panelSessionID, app.sessions.contains(where: { $0.id == id }), !urls.isEmpty else { return false }
-        app.attachmentDrafts.add(urls, to: id)
+    /// Files dropped on the open conversation panel become its attachments;
+    /// on a files node or its panel they join that node; anywhere else on the
+    /// canvas they make a new files node there. `point` is in page CSS px.
+    func dropFiles(_ urls: [URL], at point: CGPoint) -> Bool {
+        guard ready, let webView, !urls.isEmpty, let boardID = canvas.currentBoard?.id else { return false }
+        // The page knows what is under the point; it never sees the files.
+        let script = "(window.agentDesk.dropTarget && window.agentDesk.dropTarget(\(Double(point.x)), \(Double(point.y)))) || { kind: 'none' }"
+        webView.evaluateJavaScript(script) { [weak self] result, _ in
+            guard let self else { return }
+            let target = result as? [String: Any] ?? [:]
+            let number = { (key: String) in (target[key] as? NSNumber)?.doubleValue }
+            switch target["kind"] as? String {
+            case "panel":
+                guard let id = self.panelSessionID, self.app.sessions.contains(where: { $0.id == id }) else { return }
+                self.app.attachmentDrafts.add(urls, to: id)
+            case "source":
+                guard let id = (target["nodeID"] as? String).flatMap(UUID.init(uuidString:)) else { return }
+                self.canvas.addFiles(boardID: boardID, nodeID: id, urls: urls)
+            case "canvas":
+                guard let x = number("x"), let y = number("y"), x.isFinite, y.isFinite else { return }
+                self.canvas.createFileNode(boardID: boardID, at: CanvasPoint(x: x, y: y), urls: urls)
+            default: return
+            }
+        }
         return true
+    }
+
+    /// An MCP result from the workbench, placed in the middle of what the canvas shows.
+    func placeMCPResult(_ result: CanvasMCPResult) {
+        let fallback = canvas.currentBoard?.nextFreePosition() ?? CanvasPoint(x: 80, y: 80)
+        guard ready, let webView else { return canvas.createMCPNode(result: result, at: fallback) }
+        webView.evaluateJavaScript("(window.agentDesk.viewCenter && window.agentDesk.viewCenter()) || null") { [weak self] value, _ in
+            let center = value as? [String: Any]
+            let x = (center?["x"] as? NSNumber)?.doubleValue, y = (center?["y"] as? NSNumber)?.doubleValue
+            let point = x.flatMap { x in y.map { CanvasPoint(x: x, y: $0) } } ?? fallback
+            self?.canvas.createMCPNode(result: result, at: point)
+        }
     }
 
     /// Sends `composer.insert` for an MCP result chosen in the native workbench.
@@ -273,10 +328,11 @@ final class CanvasBridge: NSObject, ObservableObject, WKScriptMessageHandler {
             canvas.moveNodes(boardID: id, positions: Dictionary(positions.map { ($0.nodeID, CanvasPoint(x: $0.x, y: $0.y)) }, uniquingKeysWith: { $1 }))
         case "node.delete":
             guard let id = c.boardID, let ids = c.nodeIDs, !ids.isEmpty else { return }
-            let titles = canvas.library.boards.first { $0.id == id }?.nodes.filter { ids.contains($0.id) }
-                .compactMap { node in app.sessions.first { $0.id == node.sessionID }?.title } ?? []
+            let nodes = canvas.library.boards.first { $0.id == id }?.nodes.filter { ids.contains($0.id) } ?? []
+            let titles = nodes.compactMap { node in node.source?.title ?? app.sessions.first { $0.id == node.sessionID }?.title }
             let name = titles.count == 1 ? "「\(titles[0])」" : "\(ids.count) 个节点"
-            confirm(title: "删除\(name)？", detail: "只删除本地记录和画布上的节点，官方 CLI 中的历史和工作目录文件不受影响。", action: "删除") { [canvas] in
+            let files = nodes.contains { $0.source?.kind == .files } ? "文件节点里复制的文件也会删除，原文件不受影响。" : ""
+            confirm(title: "删除\(name)？", detail: "只删除本地记录和画布上的节点，官方 CLI 中的历史和工作目录文件不受影响。" + files, action: "删除") { [canvas] in
                 canvas.deleteNodes(boardID: id, nodeIDs: Set(ids))
             }
         case "node.rename":
@@ -285,6 +341,23 @@ final class CanvasBridge: NSObject, ObservableObject, WKScriptMessageHandler {
         case "node.branch":
             guard let b = c.boardID, let n = c.nodeID, let m = c.messageID else { return }
             canvas.branch(boardID: b, nodeID: n, messageID: m)
+        case "source.createFiles":
+            guard let id = c.boardID, let x = c.x, let y = c.y else { return }
+            canvas.createFileNode(boardID: id, at: CanvasPoint(x: x, y: y))
+        case "source.addFiles":
+            guard let b = c.boardID, let n = c.nodeID else { return }
+            canvas.addFiles(boardID: b, nodeID: n)
+        case "source.removeFile":
+            guard let b = c.boardID, let n = c.nodeID, let file = c.attachmentID else { return }
+            canvas.removeFile(boardID: b, nodeID: n, fileID: file)
+        case "source.rename":
+            guard let b = c.boardID, let n = c.nodeID, let title = c.title else { return }
+            canvas.renameSource(boardID: b, nodeID: n, title: title)
+        case "source.rerunMCP":
+            // Only opens the workbench; the tool runs when the user presses Run there.
+            guard let b = c.boardID, let n = c.nodeID, canvas.library.boards.first(where: { $0.id == b })?.node(n)?.source?.kind == .mcp else { return }
+            openMCPRefresh(b, n)
+            return
         case "edge.create":
             guard let id = c.boardID, let s = c.source, let t = c.target else { return }
             canvas.connect(boardID: id, source: s, target: t)
@@ -421,7 +494,7 @@ final class CanvasBridge: NSObject, ObservableObject, WKScriptMessageHandler {
         let boards = canvas.library.boards.map { BridgeBoardSummary(id: $0.id, title: $0.title, nodeCount: $0.nodes.count) }
         if boards != sentBoards { state.boards = boards; sentBoards = boards }
         if let current = canvas.currentBoard {
-            let board = BridgeEncoding.board(current, sessions: sessions, running: app.runningSessionIDs)
+            let board = BridgeEncoding.board(current, sessions: sessions, running: app.runningSessionIDs, importing: canvas.importingSources)
             if board != sentBoard { state.board = board; sentBoard = board }
         }
 

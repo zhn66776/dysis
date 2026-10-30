@@ -4,6 +4,7 @@ import remarkGfm from 'remark-gfm'
 import { send } from './bridge'
 import { ContextMeter, Dropdown, EffortPicker, ModelPicker, QuotaMeter } from './Controls'
 import { ProviderMark } from './providers'
+import { composerHint, dataInputs, formatBytes, imageNotes, kindLabel } from './sources'
 import type { AppState, MessagePayload, NodePayload } from './types'
 
 interface Props {
@@ -27,10 +28,7 @@ export function ChatPanel({ state, node, draft, onDraft, onClose }: Props) {
   const parentNode = node.inherited ? board.nodes.find(n => n.id === node.inherited!.fromNodeID) : undefined
   const parent = parentNode ? state.summaries[parentNode.sessionID] : undefined
   const parentDetail = parentNode ? state.details[parentNode.sessionID] : undefined
-  const upstream = board.edges.filter(e => e.kind === 'data' && e.target === node.id).map(e => {
-    const source = board.nodes.find(n => n.id === e.source)
-    return { edge: e, summary: source ? state.summaries[source.sessionID] : undefined }
-  })
+  const upstream = dataInputs(board, node.id, state.summaries)
 
   // Follow the stream only while the reader is already at the bottom.
   useLayoutEffect(() => {
@@ -40,6 +38,7 @@ export function ChatPanel({ state, node, draft, onDraft, onClose }: Props) {
   useEffect(() => { stick.current = true }, [node.id])
 
   if (!summary) return null
+  const notes = imageNotes(upstream, summary.provider)
 
   const files = state.drafts[node.sessionID]
   const importing = files?.importing ?? false
@@ -54,7 +53,7 @@ export function ChatPanel({ state, node, draft, onDraft, onClose }: Props) {
   }
 
   return (
-    <aside className="panel" onKeyDown={e => { if (e.key === 'Escape' && !e.nativeEvent.isComposing) onClose() }}>
+    <aside className="panel" data-drop="panel" onKeyDown={e => { if (e.key === 'Escape' && !e.nativeEvent.isComposing) onClose() }}>
       <header className="panel-head">
         <div className="panel-title-row">
           <ProviderMark provider={summary.provider} size={18} />
@@ -108,13 +107,18 @@ export function ChatPanel({ state, node, draft, onDraft, onClose }: Props) {
           {upstream.length > 0 && (
             <div className="upstream">
               <span className="sub">数据线输入</span>
-              {upstream.map(u => (
-                <span key={u.edge.id} className={`chip p-${u.summary?.provider ?? 'claude'} tinted`} title={u.edge.pending ? '有新输出，下一次发送时带上' : '已送达，等待上游的新回复'}>
-                  → {u.summary?.title ?? '未知节点'}{u.edge.pending ? ' · 新' : ''}
+              {upstream.map(u => u.source ? (
+                <span key={u.edge.id} className="chip source-chip" title={u.edge.pending ? '资料有新内容，下一次发送时带上' : '已送达，资料更新后会再次带上'}>
+                  {u.source.kind === 'mcp' ? 'MCP' : '文件'} · {u.title}{u.edge.pending ? ' · 新' : ''}
+                </span>
+              ) : (
+                <span key={u.edge.id} className={`chip p-${u.provider ?? 'claude'} tinted`} title={u.edge.pending ? '有新输出，下一次发送时带上' : '已送达，等待上游的新回复'}>
+                  → {u.title}{u.edge.pending ? ' · 新' : ''}
                 </span>
               ))}
             </div>
           )}
+          {notes.map(n => <div key={n} className="source-note">{n}</div>)}
         </section>
       )}
 
@@ -167,9 +171,7 @@ export function ChatPanel({ state, node, draft, onDraft, onClose }: Props) {
               { key: 'mcp', label: 'MCP 工具…', detail: '结果插入输入框', onSelect: () => send({ type: 'app.open', window: 'mcp', sessionID: summary.id }) },
             ]}
           />
-          <span className="composer-hint">{upstream.length > 0 && !summary.remoteShort
-            ? `发送 1 次，带上 ${upstream.filter(u => u.edge.pending).length} 个上游输出${upstream.some(u => !u.edge.pending) ? `（${upstream.filter(u => !u.edge.pending).length} 个还没有回复）` : ''}`
-            : '也可以把文件拖进窗口'}</span>
+          <span className="composer-hint">{composerHint(upstream, Boolean(summary.remoteShort))}</span>
           <span className="spacer" />
           {running ? (
             <button className="send stop" aria-label="停止" onClick={() => send({ type: 'chat.stop', sessionID: summary.id })}>■</button>
@@ -182,8 +184,6 @@ export function ChatPanel({ state, node, draft, onDraft, onClose }: Props) {
   )
 }
 
-const kindLabel: Record<string, string> = { image: '图片', pdf: 'PDF', document: '文档', text: '文本' }
-const formatBytes = (n: number) => n >= 1 << 20 ? `${(n / (1 << 20)).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`
 
 // Before the first send the mode comes from Swift; afterwards from the
 // sources recorded on the first message.

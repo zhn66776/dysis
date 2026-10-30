@@ -14,6 +14,8 @@ final class CanvasModel: ObservableObject {
     /// A downstream re-run in progress: nodes in order and the current index.
     @Published private(set) var chain: (boardID: UUID, order: [UUID], index: Int)?
     private var chainTask: Task<Void, Never>?
+    /// Files nodes whose files are being imported.
+    @Published private(set) var importingSources: Set<UUID> = []
     static let maxChainCalls = CanvasChainRunner.maxCalls
 
     let app: AppModel
@@ -102,7 +104,15 @@ final class CanvasModel: ObservableObject {
         if library.boards.isEmpty { library.boards = [CanvasBoard(title: "我的画布")] }
         if library.selectedBoardID == id { library.selectedBoardID = library.boards[0].id }
         persist()
-        for node in board.nodes { app.deleteSession(node.sessionID) }
+        removeLocalRecords(of: board.nodes)
+    }
+
+    /// Conversations behind chat nodes, and the copied files of files nodes.
+    private func removeLocalRecords(of nodes: [CanvasNode]) {
+        for node in nodes where !node.isSource { app.deleteSession(node.sessionID) }
+        let files = nodes.flatMap { $0.source?.files ?? [] }
+        guard !files.isEmpty, let store = try? AttachmentStore(root: app.dataRoot) else { return }
+        for file in files { try? store.remove(file) }
     }
 
     // MARK: Nodes and edges
@@ -125,9 +135,9 @@ final class CanvasModel: ObservableObject {
 
     func deleteNodes(boardID: UUID, nodeIDs: Set<UUID>) {
         guard let board = library.boards.first(where: { $0.id == boardID }) else { return }
-        let sessions = board.nodes.filter { nodeIDs.contains($0.id) }.map(\.sessionID)
+        let removed = board.nodes.filter { nodeIDs.contains($0.id) }
         update(boardID) { $0.removeNodes(nodeIDs) }
-        for id in sessions { app.deleteSession(id) }
+        removeLocalRecords(of: removed)
     }
 
     func connect(boardID: UUID, source: UUID, target: UUID) {
@@ -159,7 +169,8 @@ final class CanvasModel: ObservableObject {
     /// with the template's prompt in its composer. Nothing is sent.
     func merge(boardID: UUID, nodeIDs: [UUID], provider: ProviderID, template: CanvasMergeTemplate) {
         guard let board = library.boards.first(where: { $0.id == boardID }) else { return }
-        let sources = nodeIDs.compactMap { board.node($0) }
+        // Files and MCP nodes are not conversations to compare; they stay upstream.
+        let sources = nodeIDs.compactMap { board.node($0) }.filter { !$0.isSource }
         guard sources.count >= 2 else { app.errorMessage = "至少选择两个节点才能合流。"; return }
         guard sources.count <= 8 else { app.errorMessage = "一次最多合并 8 个节点。"; return }
         guard let sessionID = app.newSession(provider: provider) else { return }
@@ -237,6 +248,102 @@ final class CanvasModel: ObservableObject {
         chainTask?.cancel()
     }
 
+    // MARK: Source nodes
+
+    private func source(_ boardID: UUID, _ nodeID: UUID) -> CanvasSource? {
+        library.boards.first { $0.id == boardID }?.node(nodeID)?.source
+    }
+
+    private func updateSource(_ boardID: UUID, _ nodeID: UUID, _ change: (inout CanvasSource) -> Void) {
+        update(boardID) { board in
+            if let i = board.nodes.firstIndex(where: { $0.id == nodeID }), board.nodes[i].source != nil { change(&board.nodes[i].source!) }
+        }
+    }
+
+    /// A files node at `point` holding `urls`, or files picked in the native
+    /// panel. The node appears at once and is removed again if nothing imports.
+    func createFileNode(boardID: UUID, at point: CanvasPoint, urls: [URL]? = nil) {
+        guard currentBoard?.id == boardID, let urls = urls ?? AttachmentDrafts.pickFiles(title: "选择放到画布上的文件") else { return }
+        let node = CanvasNode.source(.files([]), position: currentBoard?.freePosition(near: point) ?? point)
+        update(boardID) { $0.nodes.append(node) }
+        focusNodeID = node.id
+        importFiles(urls, boardID: boardID, nodeID: node.id, isNew: true)
+    }
+
+    func addFiles(boardID: UUID, nodeID: UUID, urls: [URL]? = nil) {
+        guard source(boardID, nodeID)?.kind == .files, !importingSources.contains(nodeID),
+              let urls = urls ?? AttachmentDrafts.pickFiles(title: "添加到文件节点") else { return }
+        importFiles(urls, boardID: boardID, nodeID: nodeID, isNew: false)
+    }
+
+    /// Same import as message attachments (copy, downscale, extract text),
+    /// plus the same limits for the whole node: 6 files, 4 images.
+    /// A new node (`isNew`) whose import fails is removed again.
+    private func importFiles(_ urls: [URL], boardID: UUID, nodeID: UUID, isNew: Bool) {
+        let existing = source(boardID, nodeID)?.files ?? []
+        let limits = AttachmentImportLimits.default
+        if existing.count + urls.count > limits.maxFilesPerImport {
+            app.errorMessage = "一个文件节点最多放 \(limits.maxFilesPerImport) 个文件。"
+            if isNew { dropIfEmpty(boardID, nodeID) }
+            return
+        }
+        importingSources.insert(nodeID)
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                let store = try AttachmentStore(root: self.app.dataRoot)
+                let accessed = urls.filter { $0.startAccessingSecurityScopedResource() }
+                defer { accessed.forEach { $0.stopAccessingSecurityScopedResource() } }
+                let imported = try await store.importFiles(from: urls)
+                do {
+                    // Downstream prompts need text; a scanned PDF would arrive empty.
+                    try AttachmentStore.validateForTextPrompt(imported)
+                    guard let current = self.source(boardID, nodeID) else { throw CancellationError() }
+                    try CanvasSource.checkFileLimits(existing: current.files, adding: imported, limits: limits)
+                    self.updateSource(boardID, nodeID) { $0.setFiles(current.files + imported) }
+                } catch {
+                    for file in imported { try? store.remove(file) }
+                    throw error
+                }
+            } catch {
+                if !(error is CancellationError) { self.app.errorMessage = error.localizedDescription }
+            }
+            self.importingSources.remove(nodeID)
+            if isNew { self.dropIfEmpty(boardID, nodeID) }
+        }
+    }
+
+    private func dropIfEmpty(_ boardID: UUID, _ nodeID: UUID) {
+        guard let source = source(boardID, nodeID), source.kind == .files, source.files.isEmpty else { return }
+        update(boardID) { $0.removeNodes([nodeID]) }
+    }
+
+    func removeFile(boardID: UUID, nodeID: UUID, fileID: UUID) {
+        guard !importingSources.contains(nodeID), let files = source(boardID, nodeID)?.files, let file = files.first(where: { $0.id == fileID }) else { return }
+        updateSource(boardID, nodeID) { $0.setFiles(files.filter { $0.id != fileID }) }
+        if let store = try? AttachmentStore(root: app.dataRoot) { try? store.remove(file) }
+    }
+
+    /// An empty title goes back to the automatic one.
+    func renameSource(boardID: UUID, nodeID: UUID, title: String) {
+        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        updateSource(boardID, nodeID) { $0.customTitle = trimmed.isEmpty ? nil : String(trimmed.prefix(100)) }
+    }
+
+    /// An MCP result from the workbench, as a new node on the current board.
+    func createMCPNode(result: CanvasMCPResult, at point: CanvasPoint) {
+        guard let board = currentBoard else { return }
+        let node = CanvasNode.source(.mcp(result), position: board.freePosition(near: point))
+        update(board.id) { $0.nodes.append(node) }
+        focusNodeID = node.id
+    }
+
+    /// The tool was run again from the workbench: a new version for downstream nodes.
+    func updateMCPNode(boardID: UUID, nodeID: UUID, result: CanvasMCPResult) {
+        guard source(boardID, nodeID)?.kind == .mcp else { return }
+        updateSource(boardID, nodeID) { $0.setMCP(result) }
+    }
+
     func saveViewport(boardID: UUID, viewport: CanvasViewport) {
         update(boardID) { $0.viewport = viewport }
     }
@@ -246,11 +353,14 @@ final class CanvasModel: ObservableObject {
     @discardableResult
     func send(boardID: UUID, nodeID: UUID, text: String) -> Bool {
         guard let board = library.boards.first(where: { $0.id == boardID }), let node = board.node(nodeID) else { return false }
-        let context = CanvasContextBuilder.context(board: board, nodeID: nodeID, sessions: sessionsByID)
+        // Images already in the composer count against the per-turn image cap.
+        let draftImages = app.attachmentDrafts.files[node.sessionID, default: []].filter(\.isImage).count
+        let context = CanvasContextBuilder.context(board: board, nodeID: nodeID, sessions: sessionsByID,
+                                                   imageBudget: CanvasContextBuilder.maxImagesPerTurn - draftImages)
         guard app.send(text, to: node.sessionID, context: context) else { return false }
         if context.fork != nil, let edge = board.inheritEdge(into: nodeID) { pendingForks[node.sessionID] = (boardID, edge.id) }
-        // Each upstream reply is delivered once; a new reply makes the edge pending again.
-        let delivered = Dictionary(uniqueKeysWithValues: context.upstream.map { ($0.edgeID, $0.messageID) })
+        // Each upstream reply and source version is delivered once; a new one makes the edge pending again.
+        let delivered = context.deliveries
         if !delivered.isEmpty {
             update(boardID) { board in
                 for i in board.edges.indices { if let m = delivered[board.edges[i].id] { board.edges[i].lastDeliveredMessageID = m } }

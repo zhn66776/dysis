@@ -77,8 +77,8 @@ final class CanvasSchemeHandler: NSObject, WKURLSchemeHandler {
     }
 }
 
-/// Files dragged onto the window become attachments of the open conversation,
-/// read natively so the page never sees file paths.
+/// Files dragged onto the window become attachments of the open conversation
+/// or a files node on the canvas, read natively so the page never sees file paths.
 final class CanvasWKWebView: WKWebView {
     weak var bridge: CanvasBridge?
 
@@ -87,18 +87,23 @@ final class CanvasWKWebView: WKWebView {
     }
 
     override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
-        fileURLs(sender).isEmpty ? super.draggingEntered(sender) : (bridge?.panelSessionID == nil ? [] : .copy)
+        fileURLs(sender).isEmpty ? super.draggingEntered(sender) : (bridge == nil ? [] : .copy)
     }
 
     override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
-        fileURLs(sender).isEmpty ? super.draggingUpdated(sender) : (bridge?.panelSessionID == nil ? [] : .copy)
+        fileURLs(sender).isEmpty ? super.draggingUpdated(sender) : (bridge == nil ? [] : .copy)
+    }
+
+    /// Window coordinates to page CSS px from the top-left.
+    private func pagePoint(_ locationInWindow: NSPoint) -> CGPoint {
+        let local = convert(locationInWindow, from: nil)
+        return CGPoint(x: local.x, y: isFlipped ? local.y : bounds.height - local.y)
     }
 
     /// The page's top strip acts as the title bar: drag to move the window,
     /// double-click for the system title-bar action. Controls in it still click.
     override func mouseDown(with event: NSEvent) {
-        let local = convert(event.locationInWindow, from: nil)
-        let point = CGPoint(x: local.x, y: isFlipped ? local.y : bounds.height - local.y)
+        let point = pagePoint(event.locationInWindow)
         guard let window, bridge?.isWindowDragPoint(point) == true else { return super.mouseDown(with: event) }
         if event.clickCount == 2 {
             switch UserDefaults.standard.string(forKey: "AppleActionOnDoubleClick") {
@@ -126,7 +131,7 @@ final class CanvasWKWebView: WKWebView {
     override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
         let urls = fileURLs(sender)
         guard !urls.isEmpty else { return super.performDragOperation(sender) }
-        return bridge?.dropFiles(urls) ?? false
+        return bridge?.dropFiles(urls, at: pagePoint(sender.draggingLocation)) ?? false
     }
 }
 
@@ -202,7 +207,11 @@ struct CanvasRootView: View {
     @Environment(\.openWindow) private var openWindow
     @State private var mcpTarget: MCPTarget?
 
-    private struct MCPTarget: Identifiable { let id = UUID(); let sessionID: UUID? }
+    /// `refresh` is set when the workbench runs an MCP node's tool again.
+    private struct MCPTarget: Identifiable {
+        let id = UUID(); let sessionID: UUID?
+        var refresh: (boardID: UUID, nodeID: UUID, title: String, preset: MCPWorkbenchPreset)?
+    }
 
     init(model: AppModel, canvas: CanvasModel) {
         self.model = model
@@ -220,12 +229,27 @@ struct CanvasRootView: View {
                     default: mcpTarget = MCPTarget(sessionID: sessionID)
                     }
                 }
+                bridge.openMCPRefresh = { boardID, nodeID in
+                    guard let source = bridge.canvas.library.boards.first(where: { $0.id == boardID })?.node(nodeID)?.source, let result = source.mcp else { return }
+                    let preset = MCPWorkbenchPreset(serverID: result.serverID, toolName: result.toolName, argumentsJSON: result.argumentsJSON)
+                    mcpTarget = MCPTarget(sessionID: nil, refresh: (boardID, nodeID, source.title, preset))
+                }
             }
             .sheet(item: $mcpTarget) { target in
-                let title = target.sessionID.flatMap { id in model.sessions.first { $0.id == id }?.title }
-                MCPWorkbenchView(root: model.dataRoot, canAttach: title != nil, targetLabel: title ?? "请先在画布上打开一个节点") { result in
-                    if let id = target.sessionID { bridge.insertIntoComposer(sessionID: id, text: result) }
-                    mcpTarget = nil
+                if let refresh = target.refresh {
+                    MCPWorkbenchView(root: model.dataRoot, showsAttach: false, preset: refresh.preset, placeLabel: "更新「\(refresh.title)」", onPlace: { result in
+                        bridge.canvas.updateMCPNode(boardID: refresh.boardID, nodeID: refresh.nodeID, result: result)
+                        mcpTarget = nil
+                    })
+                } else {
+                    let title = target.sessionID.flatMap { id in model.sessions.first { $0.id == id }?.title }
+                    MCPWorkbenchView(root: model.dataRoot, canAttach: title != nil, targetLabel: title ?? "请先在画布上打开一个节点", placeLabel: "放到画布上", onAttach: { result in
+                        if let id = target.sessionID { bridge.insertIntoComposer(sessionID: id, text: result) }
+                        mcpTarget = nil
+                    }, onPlace: { result in
+                        bridge.placeMCPResult(result)
+                        mcpTarget = nil
+                    })
                 }
             }
     }

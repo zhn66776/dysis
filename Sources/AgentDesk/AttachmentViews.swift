@@ -15,14 +15,19 @@ final class AttachmentDrafts: ObservableObject {
     init(root: URL) { self.root = root }
 
     func choose(for id: UUID) {
-        guard !importing.contains(id) else { return }
+        guard !importing.contains(id), let urls = Self.pickFiles() else { return }
+        add(urls, to: id)
+    }
+
+    /// The native file panel for images and documents; nil when cancelled.
+    static func pickFiles(title: String = "添加图片或文档") -> [URL]? {
         let panel = NSOpenPanel()
-        panel.title = "添加图片或文档"
+        panel.title = title
         panel.allowsMultipleSelection = true
         panel.canChooseDirectories = false
         panel.allowedContentTypes = [.image, .pdf, .plainText] + ["doc", "docx", "md", "csv", "json"].compactMap { UTType(filenameExtension: $0) }
-        guard panel.runModal() == .OK else { return }
-        add(panel.urls, to: id)
+        guard panel.runModal() == .OK, !panel.urls.isEmpty else { return nil }
+        return panel.urls
     }
 
     func add(_ urls: [URL], to id: UUID) {

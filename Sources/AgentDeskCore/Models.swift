@@ -12,6 +12,8 @@ public enum ProviderID: String, Codable, CaseIterable, Identifiable, Sendable {
     public var symbol: String {
         switch self { case .claude: return "sun.max"; case .codex: return "sparkle"; case .grok: return "bolt"; case .gemini: return "sparkles" }
     }
+    /// The Cursor connection takes text only.
+    public var acceptsImages: Bool { self == .claude || self == .codex }
 }
 
 public enum MessageRole: String, Codable, Sendable { case user, assistant }
