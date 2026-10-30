@@ -133,7 +133,11 @@ public struct AgentRequest: Sendable {
     public let images: [AgentImageInput]
     /// Used only when `remoteSessionID` is nil: the first turn forks this session.
     public let forkFrom: AgentFork?
-    public init(localSessionID: UUID, remoteSessionID: String?, prompt: String, workingDirectory: URL, modelID: String, executableURL: URL, reasoningEffort: String? = nil, images: [AgentImageInput] = [], forkFrom: AgentFork? = nil) {
+    /// MCP servers the model may call itself this turn. Empty keeps the
+    /// provider tool-free.
+    public let mcpServers: [AgentMCPServer]
+    public init(localSessionID: UUID, remoteSessionID: String?, prompt: String, workingDirectory: URL, modelID: String, executableURL: URL, reasoningEffort: String? = nil, images: [AgentImageInput] = [], forkFrom: AgentFork? = nil, mcpServers: [AgentMCPServer] = []) {
+        self.mcpServers = mcpServers
         self.localSessionID = localSessionID; self.remoteSessionID = remoteSessionID; self.prompt = prompt; self.workingDirectory = workingDirectory; self.modelID = modelID; self.executableURL = executableURL
         self.reasoningEffort = reasoningEffort
         self.images = images

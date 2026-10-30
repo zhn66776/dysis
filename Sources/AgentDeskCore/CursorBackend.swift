@@ -27,12 +27,16 @@ public struct CursorBackend: AgentBackend, Sendable {
                     // stores the exact discovered model ID (for example
                     // grok-4.7-high or gemini-4-argon-high).
                     let cursorModelID = request.modelID
+                    try CursorBackend.writeMCPConfig(request.mcpServers, workspace: request.workingDirectory)
+                    for server in request.mcpServers { environment.merge(server.environment) { $1 } }
                     var arguments = [
                         "--print", "--model", cursorModelID,
                         "--mode", "ask", "--sandbox", "enabled", "--trust",
                         "--workspace", request.workingDirectory.path,
                         "--output-format", "stream-json", "--stream-partial-output"
                     ]
+                    if !request.mcpServers.isEmpty { arguments.append("--approve-mcps") }
+                    let allowedMCP = request.mcpServers.map(\.name)
                     if let remoteID = request.remoteSessionID, !remoteID.isEmpty {
                         arguments += ["--resume", remoteID]
                     }
@@ -70,8 +74,12 @@ public struct CursorBackend: AgentBackend, Sendable {
                             }
                             if let status = parsed.status, !status.isEmpty { continuation.yield(.status(status)) }
                             if parsed.isFailure { throw AgentError.protocolFailure(SafeText.redact(parsed.failureMessage ?? "Cursor CLI 返回失败结果。")) }
-                            if parsed.hasToolCall {
-                                throw AgentError.protocolFailure("Cursor MVP 已禁用工具调用；本轮请求已停止。")
+                            if let call = parsed.mcpToolCall, CursorBackend.allows(call.server, among: allowedMCP) {
+                                if let tool = call.tool { continuation.yield(.status("正在调用 MCP 工具 \(call.server ?? "MCP") · \(tool)…")) }
+                            } else if parsed.hasToolCall {
+                                throw AgentError.protocolFailure(allowedMCP.isEmpty
+                                    ? "Cursor 想调用工具，但 AgentDesk 不给 Cursor 内置工具；本轮已停止。要让模型自己查 MCP，请在 MCP 工具里打开“让模型自己调用”。"
+                                    : "Cursor 想调用 MCP 以外的工具（读文件、运行命令等），AgentDesk 不允许；本轮已停止。")
                             }
                         case .stderrLine(let line):
                             if line.localizedCaseInsensitiveContains("login") {
@@ -92,6 +100,34 @@ public struct CursorBackend: AgentBackend, Sendable {
             }
             continuation.onTermination = { _ in task.cancel() }
         }
+    }
+
+    /// Cursor reads MCP servers from the workspace's `.cursor/mcp.json`; the
+    /// workspace is this chat's own folder, so the file is rewritten (or
+    /// removed) on every send to match what the user opened to the model.
+    static func writeMCPConfig(_ servers: [AgentMCPServer], workspace: URL) throws {
+        let url = workspace.appendingPathComponent(".cursor/mcp.json")
+        guard !servers.isEmpty else {
+            if FileManager.default.fileExists(atPath: url.path) { try FileManager.default.removeItem(at: url) }
+            return
+        }
+        var map: [String: Any] = [:]
+        for server in servers {
+            switch server.transport {
+            case .stdio(let command, let arguments): map[server.name] = ["command": command, "args": arguments]
+            case .streamableHTTP(let address): map[server.name] = ["url": address]
+            }
+        }
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try JSONSerialization.data(withJSONObject: ["mcpServers": map], options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]).write(to: url, options: .atomic)
+    }
+
+    /// Cursor may prefix the configured name (for example with the project);
+    /// an unnamed call is still one of ours, since only ours are configured.
+    static func allows(_ server: String?, among names: [String]) -> Bool {
+        guard !names.isEmpty else { return false }
+        guard let server, !server.isEmpty else { return true }
+        return names.contains { server == $0 || server.hasSuffix("-\($0)") || server.hasSuffix("_\($0)") }
     }
 
     private static func requireLogin(request: AgentRequest, environment: [String: String]) async throws {
@@ -126,6 +162,13 @@ public struct CursorJSONEvent: Equatable, Sendable {
     public var isFailure: Bool
     public var failureMessage: String?
     public var hasToolCall: Bool
+    /// Set for an MCP tool call (`tool_call.mcpToolCall`); server and tool when given.
+    public var mcpToolCall: CursorMCPCall?
+}
+
+public struct CursorMCPCall: Equatable, Sendable {
+    public var server: String?
+    public var tool: String?
 }
 
 public enum CursorJSONEventParser {
@@ -151,6 +194,12 @@ public enum CursorJSONEventParser {
         }
         if type == "tool_call" {
             event.hasToolCall = true
+            if let call = object["tool_call"] as? [String: Any],
+               let mcp = call.first(where: { $0.key.lowercased().contains("mcp") })?.value as? [String: Any] {
+                let args = mcp["args"] as? [String: Any] ?? mcp
+                event.mcpToolCall = CursorMCPCall(server: args["providerIdentifier"] as? String ?? args["serverName"] as? String,
+                                                  tool: args["toolName"] as? String ?? args["name"] as? String)
+            }
         }
         if type == "result" || type == "final" {
             event.finalText = object["result"] as? String ?? object["text"] as? String ?? object["content"] as? String

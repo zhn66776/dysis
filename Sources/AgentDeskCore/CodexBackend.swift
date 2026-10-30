@@ -64,7 +64,7 @@ public final class CodexBackend: AgentBackend, @unchecked Sendable {
         try ensureMCPNamesCanBeDisabled(disabledMCPNames)
         let process = CLIProcess(
             executable: executableURL,
-            arguments: appServerArguments(disabling: disabledMCPNames),
+            arguments: try appServerArguments(disabling: disabledMCPNames),
             directory: directory,
             environment: RuntimeEnvironment.subscriptionOnly()
         )
@@ -198,10 +198,12 @@ public final class CodexBackend: AgentBackend, @unchecked Sendable {
             throw AgentError.unavailable("工作目录不存在：\(request.workingDirectory.path)")
         }
 
-        let environment = RuntimeEnvironment.subscriptionOnly()
+        var environment = RuntimeEnvironment.subscriptionOnly()
+        for server in request.mcpServers { environment.merge(server.environment) { $1 } }
         let disabledMCPNames = try await Self.discoverConfiguredMCPNames(executableURL: executableURL, directory: request.workingDirectory)
         try Self.ensureMCPNamesCanBeDisabled(disabledMCPNames)
-        let process = processFactory(executableURL, Self.appServerArguments(disabling: disabledMCPNames), request.workingDirectory, environment)
+        let mcpServers = Self.codexMCPServers(request.mcpServers, avoiding: disabledMCPNames)
+        let process = processFactory(executableURL, try Self.appServerArguments(disabling: disabledMCPNames, providing: mcpServers), request.workingDirectory, environment)
         try process.start()
         defer { process.terminate() }
 
@@ -248,7 +250,8 @@ public final class CodexBackend: AgentBackend, @unchecked Sendable {
                 }
 
                 if let method = object["method"] as? String, object["id"] != nil {
-                    try rejectServerRequest(method: method, id: object["id"]!, process: process)
+                    try answerServerRequest(method: method, id: object["id"]!, params: object["params"] as? [String: Any] ?? [:],
+                                            allowedMCPServers: Set(mcpServers.map(\.name)), process: process)
                     continue
                 }
 
@@ -401,7 +404,7 @@ public final class CodexBackend: AgentBackend, @unchecked Sendable {
     private static func discoverConfiguredMCPNames(executableURL: URL, directory: URL) async throws -> [String] {
         let process = CLIProcess(
             executable: executableURL,
-            arguments: Self.appServerArguments(),
+            arguments: try Self.appServerArguments(),
             directory: directory,
             environment: RuntimeEnvironment.subscriptionOnly()
         )
@@ -443,7 +446,17 @@ public final class CodexBackend: AgentBackend, @unchecked Sendable {
         throw AgentError.processFailure("Codex discovery 未返回有效配置。")
     }
 
-    private static func appServerArguments(disabling names: [String] = []) -> [String] {
+    /// The user's own Codex MCP servers stay disabled; ours get a name that
+    /// does not merge with one of theirs.
+    static func codexMCPServers(_ servers: [AgentMCPServer], avoiding configured: [String]) -> [AgentMCPServer] {
+        servers.map { server in
+            var server = server
+            if configured.contains(server.name) { server.name = "agentdesk_\(server.name)" }
+            return server
+        }
+    }
+
+    static func appServerArguments(disabling names: [String] = [], providing servers: [AgentMCPServer] = []) throws -> [String] {
         var args = ["app-server"]
         let overrides = [
             "model_provider=\"openai\"",
@@ -479,7 +492,23 @@ public final class CodexBackend: AgentBackend, @unchecked Sendable {
             }
             args.append(contentsOf: ["-c", "mcp_servers.\(name).enabled=false"])
         }
+        for server in servers {
+            let key = "mcp_servers.\(server.name)"
+            switch server.transport {
+            case .stdio(let command, let arguments):
+                args += ["-c", "\(key).command=\(try tomlValue(command))", "-c", "\(key).args=\(try tomlValue(arguments))"]
+                if !server.environment.isEmpty { args += ["-c", "\(key).env_vars=\(try tomlValue(server.environment.keys.sorted()))"] }
+            case .streamableHTTP(let url):
+                args += ["-c", "\(key).url=\(try tomlValue(url))"]
+            }
+            args += ["-c", "\(key).enabled=true"]
+        }
         return args
+    }
+
+    /// JSON strings and string arrays are valid TOML values.
+    private static func tomlValue(_ value: Any) throws -> String {
+        String(decoding: try JSONSerialization.data(withJSONObject: value, options: [.fragmentsAllowed, .withoutEscapingSlashes]), as: UTF8.self)
     }
 
     private static func ensureMCPNamesCanBeDisabled(_ names: [String]) throws {
@@ -519,7 +548,12 @@ public final class CodexBackend: AgentBackend, @unchecked Sendable {
             }
         case "account/rateLimits/updated":
             if let quota = Self.quota(fromRateLimits: params["rateLimits"]) { continuation.yield(.quota(quota)) }
-        case "item/started", "item/completed", "turn/started", "thread/status/changed":
+        case "item/started":
+            if let item = params["item"] as? [String: Any], item["type"] as? String == "mcpToolCall",
+               let server = item["server"] as? String, let tool = item["tool"] as? String {
+                continuation.yield(.status("正在调用 MCP 工具 \(server) · \(tool)…"))
+            }
+        case "item/completed", "turn/started", "thread/status/changed":
             break
         default:
             // Ignore forward-compatible notifications. Unknown data is never rendered as model text.
@@ -527,9 +561,13 @@ public final class CodexBackend: AgentBackend, @unchecked Sendable {
         }
     }
 
-    private func rejectServerRequest(method: String, id: Any, process: CLIProcess) throws {
+    /// Everything is declined, except the approval a server the user opened
+    /// to the model asks for before one of its tool calls.
+    private func answerServerRequest(method: String, id: Any, params: [String: Any], allowedMCPServers: Set<String>, process: CLIProcess) throws {
         let response: [String: Any]
         switch method {
+        case "mcpServer/elicitation/request" where Self.isToolCallApproval(params, allowed: allowedMCPServers):
+            response = ["id": id, "result": ["action": "accept", "content": [String: Any](), "_meta": NSNull()]]
         case "item/commandExecution/requestApproval", "item/fileChange/requestApproval":
             response = ["id": id, "result": ["decision": "decline"]]
         case "execCommandApproval", "applyPatchApproval":
@@ -546,6 +584,13 @@ public final class CodexBackend: AgentBackend, @unchecked Sendable {
             response = ["id": id, "error": ["code": -32000, "message": "AgentDesk declined unsupported server request."]]
         }
         try process.writeJSON(response)
+    }
+
+    /// Codex asks through MCP elicitation before a tool call that is not
+    /// marked read-only (`_meta.codex_approval_kind` "mcp_tool_call…").
+    static func isToolCallApproval(_ params: [String: Any], allowed: Set<String>) -> Bool {
+        guard let server = params["serverName"] as? String, allowed.contains(server) else { return false }
+        return ((params["_meta"] as? [String: Any])?["codex_approval_kind"] as? String)?.hasPrefix("mcp_tool_call") == true
     }
 
     private static func parseObject(_ line: String) -> [String: Any]? {

@@ -19,8 +19,10 @@ public struct ClaudeBackend: AgentBackend, Sendable {
                     var environment = RuntimeEnvironment.subscriptionOnly()
                     environment["DISABLE_AUTOUPDATER"] = "1"
                     try await ClaudeBackend.requireSubscription(request: request, environment: environment)
+                    // stdio MCP servers inherit the CLI's environment.
+                    for server in request.mcpServers { environment.merge(server.environment) { $1 } }
 
-                    var arguments = try ClaudeBackend.commonArguments(modelID: request.modelID, effort: request.reasoningEffort)
+                    var arguments = try ClaudeBackend.commonArguments(modelID: request.modelID, effort: request.reasoningEffort, mcpServers: request.mcpServers)
                     arguments += try ClaudeBackend.sessionArguments(for: request)
                     let fork = request.remoteSessionID?.isEmpty == false ? nil : request.forkFrom
                     let imageContent = try MultimodalInputSupport.claudeContent(prompt: request.prompt, images: request.images)
@@ -170,13 +172,16 @@ public struct ClaudeBackend: AgentBackend, Sendable {
         return ["--session-id", request.localSessionID.uuidString]
     }
 
-    private static func commonArguments(modelID: String, effort: String?) throws -> [String] {
-        var arguments = [
-            "--safe-mode", "--restricted", "--strict-mcp-config",
-            "--mcp-config", "{\"mcpServers\":{}}",
-            "--tools", "", "--disallowedTools", "mcp__*",
+    /// Built-in tools stay off. With MCP servers the model may call only their
+    /// tools (allowed per server), over a bounded number of turns.
+    static func commonArguments(modelID: String, effort: String?, mcpServers: [AgentMCPServer] = []) throws -> [String] {
+        let toolArguments = mcpServers.isEmpty
+            ? ["--mcp-config", "{\"mcpServers\":{}}", "--tools", "", "--disallowedTools", "mcp__*"]
+            : ["--mcp-config", try mcpConfigJSON(mcpServers), "--tools", "",
+               "--allowedTools", mcpServers.map { "mcp__\($0.name)" }.joined(separator: ",")]
+        var arguments = ["--safe-mode", "--restricted", "--strict-mcp-config"] + toolArguments + [
             "--permission-mode", "dontAsk", "--permission-prompts", "none",
-            "--max-turns", "1", "--model", modelID,
+            "--max-turns", mcpServers.isEmpty ? "1" : String(maxToolTurns), "--model", modelID,
             "--output-format", "stream-json", "--verbose",
             "--include-partial-messages"
         ]
@@ -187,6 +192,21 @@ public struct ClaudeBackend: AgentBackend, Sendable {
             arguments += ["--effort", normalized]
         }
         return arguments
+    }
+
+    /// Model turns one send may take when it calls MCP tools.
+    static let maxToolTurns = 12
+
+    static func mcpConfigJSON(_ servers: [AgentMCPServer]) throws -> String {
+        var map: [String: Any] = [:]
+        for server in servers {
+            switch server.transport {
+            case .stdio(let command, let arguments): map[server.name] = ["type": "stdio", "command": command, "args": arguments]
+            case .streamableHTTP(let url): map[server.name] = ["type": "http", "url": url]
+            }
+        }
+        let data = try JSONSerialization.data(withJSONObject: ["mcpServers": map], options: [.sortedKeys, .withoutEscapingSlashes])
+        return String(decoding: data, as: UTF8.self)
     }
 
     private static func requireSubscription(request: AgentRequest, environment: [String: String]) async throws {
@@ -243,6 +263,14 @@ public enum ClaudeJSONEventParser {
         }
         if type == "system", let subtype = object["subtype"] as? String, subtype == "init" {
             event.status = "Claude 已连接。"
+            let failed = (object["mcp_servers"] as? [[String: Any]] ?? [])
+                .filter { ($0["status"] as? String).map { $0 != "connected" } ?? false }
+                .compactMap { $0["name"] as? String }
+            if !failed.isEmpty { event.status = "MCP 服务器没有连上：\(failed.joined(separator: "、"))。" }
+        }
+        if type == "assistant", let message = object["message"] as? [String: Any], let content = message["content"] as? [[String: Any]] {
+            let tools = content.filter { $0["type"] as? String == "tool_use" }.compactMap { $0["name"] as? String }
+            if let name = tools.last { event.status = "正在调用 MCP 工具 \(MCPToolName.display(name))…" }
         }
         if type == "stream_event", let nested = object["event"] as? [String: Any], let nestedType = nested["type"] as? String {
             if nestedType == "content_block_delta", let delta = nested["delta"] as? [String: Any], delta["type"] as? String == "text_delta" {
