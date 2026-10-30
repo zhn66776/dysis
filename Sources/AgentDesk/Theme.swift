@@ -7,25 +7,25 @@ import AgentDeskCore
 // colours follow the system appearance.
 
 enum Theme {
-    static let bg = dynamic(0xF5F4EE, 0x141414)
-    static let side = dynamic(0xEFEDE4, 0x1A1A1A)
-    static let card = dynamic(0xFFFFFF, 0x1F1F1F)
-    static let panel = dynamic(0xFBFAF6, 0x181818)
-    static let border = dynamic(0xE3E0D4, 0x2A2A2A)
-    static let border2 = dynamic(0xDDD9CB, 0x333333)
-    static let text = dynamic(0x2B2A26, 0xE6E6E6)
-    static let muted = dynamic(0x7A776C, 0x8A8A8A)
-    static let muted2 = dynamic(0xA9A598, 0x5A5A5A)
-    static let selection = dynamic(0xE4E1D5, 0x2A2D33)
-    static let chip = dynamic(0xEFEDE4, 0x262626)
-    static let bubble = dynamic(0xECE9DF, 0x2A2A2A)
-    static let primary = dynamic(0xC96442, 0xE6E6E6)
-    static let onPrimary = dynamic(0xFFFFFF, 0x141414)
+    static let bg = dynamic(0xF1EFE8, 0x121212)
+    static let side = dynamic(0xE9E6DC, 0x191919)
+    static let card = dynamic(0xFFFFFF, 0x262626)
+    static let panel = dynamic(0xFAF9F5, 0x1A1A1A)
+    static let border = dynamic(0xD6D2C4, 0x3A3A3A)
+    static let border2 = dynamic(0xC5C0AF, 0x4A4A4A)
+    static let text = dynamic(0x1F1E1B, 0xF0F0F0)
+    static let muted = dynamic(0x55524A, 0xB0B0B0)
+    static let muted2 = dynamic(0x7D796D, 0x8A8A8A)
+    static let selection = dynamic(0xDEDACB, 0x34383F)
+    static let chip = dynamic(0xEAE7DD, 0x303030)
+    static let bubble = dynamic(0xE6E2D6, 0x333333)
+    static let primary = dynamic(0xC96442, 0xF0F0F0)
+    static let onPrimary = dynamic(0xFFFFFF, 0x121212)
     static let ok = dynamic(0x3B6D11, 0x3FB950)
     static let run = dynamic(0x0F6E56, 0x3DBE98)
     static let bad = dynamic(0xA32D2D, 0xF09595)
     static let badBackground = dynamic(0xFCEBEB, 0x3A1A1A)
-    static let warn = dynamic(0xBA7517, 0xEF9F27)
+    static let warn = dynamic(0x93590E, 0xEF9F27)
 
     static func provider(_ p: ProviderID) -> Color {
         switch p {
@@ -138,7 +138,7 @@ private struct CardModifier: ViewModifier {
     func body(content: Content) -> some View {
         content.padding(padding)
             .background(Theme.card, in: RoundedRectangle(cornerRadius: Theme.radius(scheme)))
-            .overlay(RoundedRectangle(cornerRadius: Theme.radius(scheme)).strokeBorder(Theme.border2, lineWidth: 0.5))
+            .overlay(RoundedRectangle(cornerRadius: Theme.radius(scheme)).strokeBorder(Theme.border2, lineWidth: 1))
     }
 }
 
@@ -164,7 +164,7 @@ private struct EditorModifier: ViewModifier {
             .scrollContentBackground(.hidden)
             .padding(.horizontal, 4).padding(.vertical, 5)
             .background(Theme.card, in: RoundedRectangle(cornerRadius: 7))
-            .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(Theme.border2, lineWidth: 0.5))
+            .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(Theme.border2, lineWidth: 1))
     }
 }
 
@@ -200,7 +200,7 @@ struct SecondaryButtonStyle: ButtonStyle {
                 .foregroundStyle(destructive ? Theme.bad : Theme.text)
                 .padding(.horizontal, 10).padding(.vertical, 5)
                 .background(configuration.isPressed ? Theme.selection : Theme.card, in: RoundedRectangle(cornerRadius: 8))
-                .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(destructive && hovering ? Theme.bad : (hovering && enabled ? Theme.muted2 : Theme.border2), lineWidth: 0.5))
+                .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(destructive && hovering ? Theme.bad : (hovering && enabled ? Theme.muted2 : Theme.border2), lineWidth: 1))
                 .opacity(enabled ? 1 : 0.45)
                 .contentShape(RoundedRectangle(cornerRadius: 8))
                 .onHover { hovering = $0 }
@@ -248,7 +248,7 @@ struct ActionChipStyle: ButtonStyle {
                 .foregroundStyle(hovering && enabled ? Theme.text : Theme.muted)
                 .padding(.horizontal, 8).padding(.vertical, 2)
                 .background(Theme.card, in: RoundedRectangle(cornerRadius: 7))
-                .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(hovering && enabled ? Theme.muted2 : Theme.border2, lineWidth: 0.5))
+                .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(hovering && enabled ? Theme.muted2 : Theme.border2, lineWidth: 1))
                 .opacity(enabled ? 1 : 0.45)
                 .onHover { hovering = $0 }
         }
@@ -269,7 +269,7 @@ struct ChipToggleStyle: ToggleStyle {
                     .foregroundStyle(configuration.isOn ? Theme.text : Theme.muted)
                     .padding(.horizontal, 8).padding(.vertical, 3)
                     .background(configuration.isOn ? Theme.selection : Theme.chip, in: RoundedRectangle(cornerRadius: 6))
-                    .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(configuration.isOn ? Theme.muted2 : .clear, lineWidth: 0.5))
+                    .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(configuration.isOn ? Theme.muted2 : .clear, lineWidth: 1))
             }
             .buttonStyle(.plain)
             .opacity(enabled ? 1 : 0.5)
@@ -332,7 +332,7 @@ struct DropdownButtonStyle: ButtonStyle {
             .foregroundStyle(Theme.text)
             .padding(.horizontal, 8).padding(.vertical, 3)
             .background(Theme.card, in: RoundedRectangle(cornerRadius: 7))
-            .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(hovering && enabled ? Theme.muted2 : Theme.border2, lineWidth: 0.5))
+            .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(hovering && enabled ? Theme.muted2 : Theme.border2, lineWidth: 1))
             .opacity(enabled ? 1 : 0.55)
             .contentShape(RoundedRectangle(cornerRadius: 7))
             .onHover { hovering = $0 }
@@ -373,7 +373,7 @@ struct SegmentedChoice<Value: Hashable>: View {
                         .foregroundStyle(on ? Theme.text : Theme.muted)
                         .padding(.horizontal, 10).padding(.vertical, 3)
                         .background(on ? Theme.card : .clear, in: RoundedRectangle(cornerRadius: 6))
-                        .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(on ? Theme.border2 : .clear, lineWidth: 0.5))
+                        .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(on ? Theme.border2 : .clear, lineWidth: 1))
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
@@ -419,7 +419,7 @@ struct ThemedChip: View {
 struct Hairline: View {
     var vertical = false
     var body: some View {
-        Rectangle().fill(Theme.border).frame(width: vertical ? 0.5 : nil, height: vertical ? nil : 0.5)
+        Rectangle().fill(Theme.border).frame(width: vertical ? 1 : nil, height: vertical ? nil : 1)
     }
 }
 
@@ -437,7 +437,7 @@ struct ThemedErrorBanner: View {
         .foregroundStyle(Theme.bad)
         .padding(.leading, 12).padding(.trailing, 6).padding(.vertical, 5)
         .background(Theme.badBackground, in: RoundedRectangle(cornerRadius: 10))
-        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Theme.bad, lineWidth: 0.5))
+        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Theme.bad, lineWidth: 1))
     }
 }
 

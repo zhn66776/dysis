@@ -561,7 +561,7 @@ private struct Composer: View {
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
         .background(Theme.card, in: RoundedRectangle(cornerRadius: 14))
-        .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(Theme.border2, lineWidth: 0.5))
+        .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(Theme.border2, lineWidth: 1))
         .frame(maxWidth: 820)
         .padding(.horizontal, 20)
         .padding(.top, 6)

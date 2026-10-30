@@ -149,7 +149,7 @@ struct PlazaDetail: View {
                     }
                     .background(Theme.card)
                     .clipShape(RoundedRectangle(cornerRadius: 8))
-                    .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Theme.border2, lineWidth: 0.5))
+                    .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Theme.border2, lineWidth: 1))
                 }
                 Text("共享资料").sectionLabel().padding(.top, 6)
                 Text(record.sharedContext.isEmpty ? "在消息里补充资料，或从 MCP 工具带入结果。私聊记录不会自动进入广场。" : record.sharedContext)
@@ -207,7 +207,7 @@ struct PlazaDetail: View {
         }
         .padding(.horizontal, 10).padding(.vertical, 8)
         .background(Theme.card, in: RoundedRectangle(cornerRadius: 14))
-        .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(Theme.border2, lineWidth: 0.5))
+        .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(Theme.border2, lineWidth: 1))
         .padding(.horizontal, 16).padding(.top, 6).padding(.bottom, 14)
     }
 
