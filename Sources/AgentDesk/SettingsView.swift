@@ -254,7 +254,7 @@ private struct ProviderCard: ViewModifier {
         content
             .background(Theme.card)
             .clipShape(RoundedRectangle(cornerRadius: Theme.radius(scheme)))
-            .overlay(RoundedRectangle(cornerRadius: Theme.radius(scheme)).strokeBorder(Theme.border2, lineWidth: 0.5))
+            .overlay(RoundedRectangle(cornerRadius: Theme.radius(scheme)).strokeBorder(Theme.border2, lineWidth: 1))
     }
 }
 
