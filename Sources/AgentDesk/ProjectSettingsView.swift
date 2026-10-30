@@ -3,7 +3,7 @@ import SwiftUI
 import AgentDeskCore
 
 /// A project board's settings: its rules (`AGENTS.md`, edited in place),
-/// how Claude Code reaches them, and the commands always allowed there.
+/// how Claude Code reaches them, its memory, and the commands always allowed there.
 struct ProjectSettingsView: View {
     @ObservedObject var model: AppModel
     let project: CanvasProject
@@ -12,6 +12,8 @@ struct ProjectSettingsView: View {
     @State private var rules = ProjectRules(folder: URL(fileURLWithPath: "/"), agents: nil, claude: .missing)
     @State private var agentsText = ""
     @State private var policy = ProjectCommandPolicy(projectPath: "")
+    @State private var memoryText = ""
+    @State private var entries: [MemoryEntry] = []
     @State private var message: String?
 
     private var folder: URL { URL(fileURLWithPath: project.path, isDirectory: true) }
@@ -33,6 +35,7 @@ struct ProjectSettingsView: View {
                 VStack(alignment: .leading, spacing: 14) {
                     agentsSection
                     claudeSection
+                    memorySection
                     policySection
                     if let message { Text(message).font(Theme.sans(12)).foregroundStyle(Theme.warn) }
                 }
@@ -42,6 +45,11 @@ struct ProjectSettingsView: View {
         .frame(width: 640, height: 640)
         .themedSurface()
         .onAppear(perform: reload)
+        // A memory write elsewhere: re-read the memory, keep unsaved AGENTS.md edits.
+        .onReceive(model.memory.$revision.dropFirst()) { _ in
+            memoryText = ProjectMemory(folder: folder).text()
+            entries = ProjectMemory.parse(memoryText)
+        }
     }
 
     private var agentsSection: some View {
@@ -100,6 +108,53 @@ struct ProjectSettingsView: View {
         .themedCard()
     }
 
+    private var memorySection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("项目记忆 · \(ProjectMemory.relativePath)").font(Theme.sans(13, weight: .medium))
+            Text("在回复上点“记住这个”，或确认模型提出的草稿，才会写进来。这个项目里的所有对话都会读到：Claude Code 通过 AGENTS.md 的 \(ProjectRules.memoryImportLine) 引用读取，Codex 和 Cursor 由 AgentDesk 作为项目规则的附录注入。")
+                .font(Theme.sans(11)).foregroundStyle(Theme.muted).fixedSize(horizontal: false, vertical: true)
+            let size = memoryText.trimmingCharacters(in: .whitespacesAndNewlines).count
+            HStack {
+                Text("\(entries.count) 条 · \(size.formatted()) / \(ProjectMemory.budget.formatted()) 字").metaText()
+                Spacer()
+                if !memoryText.isEmpty {
+                    Button("在访达中显示") { NSWorkspace.shared.activateFileViewerSelecting([ProjectMemory(folder: folder).url]) }
+                        .buttonStyle(SecondaryButtonStyle())
+                }
+            }
+            if ProjectMemory.isOverBudget(memoryText) {
+                Text("超过 \(ProjectMemory.budget.formatted()) 字了。记忆每一轮都要带上，请删掉过时的条目或直接编辑文件；AgentDesk 不会自动删除。")
+                    .font(Theme.sans(12)).foregroundStyle(Theme.warn).fixedSize(horizontal: false, vertical: true)
+            }
+            if !entries.isEmpty && !rules.agentsReferenceMemory {
+                HStack {
+                    Text("AGENTS.md 里没有 \(ProjectRules.memoryImportLine)，Claude Code 的记忆改由 AgentDesk 注入。").font(Theme.sans(12)).fixedSize(horizontal: false, vertical: true)
+                    Spacer()
+                    Button("加上这一行") {
+                        do { try ProjectRules.addMemoryReference(in: folder) } catch { message = error.localizedDescription }
+                        reload()
+                    }
+                    .buttonStyle(SecondaryButtonStyle())
+                }
+            }
+            ForEach(entries) { entry in
+                HStack(alignment: .top) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(entry.text).font(Theme.sans(12)).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+                        Text([entry.date, entry.author.label, entry.source].compactMap { $0 }.joined(separator: " · ")).metaText()
+                    }
+                    Spacer()
+                    Button("删除") {
+                        do { try model.memory.remove(entry: entry.id, folder: folder) } catch { message = error.localizedDescription }
+                        reload()
+                    }
+                    .buttonStyle(SecondaryButtonStyle(destructive: true))
+                }
+            }
+        }
+        .themedCard()
+    }
+
     private var policySection: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("始终允许的命令").font(Theme.sans(13, weight: .medium))
@@ -129,5 +184,7 @@ struct ProjectSettingsView: View {
         rules = ProjectRules.read(folder)
         agentsText = rules.agents ?? ""
         policy = policyStore.load(projectPath: project.path)
+        memoryText = ProjectMemory(folder: folder).text()
+        entries = ProjectMemory.parse(memoryText)
     }
 }

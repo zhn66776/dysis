@@ -31,6 +31,7 @@ final class AppModel: ObservableObject {
     let plaza: PlazaModel
     let attachmentDrafts: AttachmentDrafts
     let folderAccess: FolderAccessCenter
+    let memory: MemoryCenter
     var dataRoot: URL { plaza.root }
 
     var selectedSession: ChatSession? { sessions.first { $0.id == selectedSessionID } }
@@ -40,6 +41,7 @@ final class AppModel: ObservableObject {
         plaza = PlazaModel(root: resolvedRoot)
         attachmentDrafts = AttachmentDrafts(root: resolvedRoot)
         folderAccess = FolderAccessCenter(root: resolvedRoot)
+        memory = MemoryCenter(root: resolvedRoot, token: folderAccess.token)
         configuration = Self.defaults()
         do {
             let store = try LocalStore(root: root)
@@ -60,6 +62,9 @@ final class AppModel: ObservableObject {
         globalRules = GlobalRulesStore(root: resolvedRoot).load()
         folderAccess.describe = { [weak self] id in
             self?.sessions.first { $0.id == id }.map { ($0.title, $0.provider) }
+        }
+        memory.describe = { [weak self] id in
+            self?.sessions.first { $0.id == id }.map { $0.modelID.isEmpty ? $0.provider.runtimeName : "\($0.provider.runtimeName)，\($0.modelID)" }
         }
     }
 
@@ -139,6 +144,7 @@ final class AppModel: ObservableObject {
         stop(sessionID: id)
         sessions.removeAll { $0.id == id }
         folderAccess.forget(session: id)
+        memory.discard(session: id)
         if selectedSessionID == id { selectedSessionID = sessions.first?.id }
         persist()
     }
@@ -163,7 +169,7 @@ final class AppModel: ObservableObject {
         guard let session = sessions.first(where: { $0.id == sessionID }) else { return ComposedRules(text: nil, sources: []) }
         let folder = project.map { URL(fileURLWithPath: $0.path, isDirectory: true) }.flatMap { FileManager.default.fileExists(atPath: $0.path) ? $0 : nil }
         return RuleLayers.compose(provider: session.provider, projectAccess: projectAccess(session, project: project), global: globalRules,
-                                  project: folder.map(ProjectRules.read), node: session.rules ?? "")
+                                  project: folder.map(ProjectRules.read), memory: folder.map { ProjectMemory(folder: $0).text() }, node: session.rules ?? "")
     }
 
     private func projectAccess(_ session: ChatSession, project: CanvasProject?) -> Bool {
@@ -178,12 +184,14 @@ final class AppModel: ObservableObject {
 
     /// MCP servers the user opened to the model (MCP 工具 → 让模型自己调用),
     /// read on every send so a change applies to the next message.
-    /// AgentDesk's files server joins them when folder access is on.
-    private func modelMCPServers(sessionID: UUID) -> [AgentMCPServer] {
+    /// AgentDesk's files server joins them when folder access is on, and on
+    /// a project board for `memory_propose`.
+    private func modelMCPServers(sessionID: UUID, project: CanvasProject?) -> [AgentMCPServer] {
         let url = dataRoot.appendingPathComponent("mcp-servers.json")
         let configs = (try? Data(contentsOf: url)).flatMap { try? JSONDecoder().decode([MCPServerConfiguration].self, from: $0) } ?? []
         var servers = AgentMCPServer.forModel(configs)
-        if configuration.folderAccess, let files = folderAccess.server(for: sessionID, dataRoot: dataRoot) { servers.append(files) }
+        let folder = project.map { URL(fileURLWithPath: $0.path, isDirectory: true) }.flatMap { FileManager.default.fileExists(atPath: $0.path) ? $0 : nil }
+        if let files = folderAccess.server(for: sessionID, dataRoot: dataRoot, files: configuration.folderAccess, project: folder) { servers.append(files) }
         return servers
     }
 
@@ -243,7 +251,7 @@ final class AppModel: ObservableObject {
         sessions[index].messages.append(ChatMessage(id: assistantID, role: .assistant, text: "", state: .streaming))
         sessions[index].updatedAt = Date()
         let session = sessions[index]
-        let request = AgentRequest(localSessionID: id, remoteSessionID: session.remoteSessionID, prompt: input, workingDirectory: URL(fileURLWithPath: session.workingDirectory), modelID: session.modelID, executableURL: executable, reasoningEffort: session.reasoningEffort, images: images, forkFrom: session.remoteSessionID == nil ? context.fork : nil, mcpServers: modelMCPServers(sessionID: id),
+        let request = AgentRequest(localSessionID: id, remoteSessionID: session.remoteSessionID, prompt: input, workingDirectory: URL(fileURLWithPath: session.workingDirectory), modelID: session.modelID, executableURL: executable, reasoningEffort: session.reasoningEffort, images: images, forkFrom: session.remoteSessionID == nil ? context.fork : nil, mcpServers: modelMCPServers(sessionID: id, project: project),
                                    projectAccess: projectAccess(session, project: project),
                                    userFolder: !URL(fileURLWithPath: session.workingDirectory).path.hasPrefix(dataRoot.path + "/"),
                                    instructions: composedRules(sessionID: id, project: project).text)

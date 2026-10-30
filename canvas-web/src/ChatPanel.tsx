@@ -2,6 +2,8 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { Reply } from './Reply'
 import { ContextInspector } from './ContextInspector'
 import { NodeRules } from './NodeRules'
+import { MemoryDrafts } from './MemoryDrafts'
+import { memoryFor } from './memory'
 import { send } from './bridge'
 import { ContextMeter, Dropdown, EffortPicker, ModelPicker, QuotaMeter } from './Controls'
 import { ProviderMark } from './providers'
@@ -52,6 +54,7 @@ export function ChatPanel({ state, node, draft, onDraft, onClose, composerFocus,
 
   if (!summary) return null
   const notes = imageNotes(upstream, summary.provider)
+  const memory = memoryFor(state.memory, node.sessionID)
 
   const files = state.drafts[node.sessionID]
   const importing = files?.importing ?? false
@@ -147,12 +150,14 @@ export function ChatPanel({ state, node, draft, onDraft, onClose, composerFocus,
           <Message key={m.id} m={m} highlighted={messageFocus?.messageID === m.id}
             onFollowUp={() => composer.current?.focus()}
             onQuote={() => send({ type: 'node.quote', boardID: board.id, nodeID: node.id, messageID: m.id })}
-            onBranch={() => send({ type: 'node.branch', boardID: board.id, nodeID: node.id, messageID: m.id })} />
+            onBranch={() => send({ type: 'node.branch', boardID: board.id, nodeID: node.id, messageID: m.id })}
+            onRemember={memory?.available ? () => send({ type: 'memory.remember', boardID: board.id, nodeID: node.id, messageID: m.id }) : undefined} />
         ))}
         {running && summary.status && <div className="status-line">{summary.status}</div>}
       </div>
 
       <div className="context-launch"><span className="sub">{upstream.length ? `${upstream.length} 个引用来源` : node.inherited ? '分支继承上下文' : '当前会话上下文'}</span><span className="spacer" /><NodeRules summary={summary} locked={running} /><button className="act" onClick={() => setContextOpen(true)}>预览本轮输入</button></div>
+      {memory && <MemoryDrafts memory={memory} boardID={board.id} />}
       {contextOpen && <ContextInspector boardID={board.id} nodeID={node.id} draft={draft} onClose={() => setContextOpen(false)} />}
       <div className="composer">
         {(hasFiles || importing) && (
@@ -212,7 +217,7 @@ function inheritNote(node: NodePayload, messages?: MessagePayload[]) {
   return first ? '已在第一次发送时通过回放继承带上父节点的文字记录。' : '已继承。'
 }
 
-function Message({ m, readOnly, onBranch, onQuote, onFollowUp, highlighted }: { m: MessagePayload; readOnly?: boolean; highlighted?: boolean; onBranch?(): void; onQuote?(): void; onFollowUp?(): void }) {
+function Message({ m, readOnly, onBranch, onQuote, onFollowUp, onRemember, highlighted }: { m: MessagePayload; readOnly?: boolean; highlighted?: boolean; onBranch?(): void; onQuote?(): void; onFollowUp?(): void; onRemember?(): void }) {
   if (m.role === 'user') {
     return (
       <div data-message-id={m.id} className={`msg-user${highlighted ? ' search-highlight' : ''}`}>
@@ -238,6 +243,7 @@ function Message({ m, readOnly, onBranch, onQuote, onFollowUp, highlighted }: { 
           <button className="act" title="继承截至这条回复的历史" onClick={onBranch}>⑂ 从这里分支</button>
           <button className="act" title="新建独立节点，只引用这条回复" onClick={onQuote}>引用</button>
           <button className="act" onClick={() => send({ type: 'clipboard.copy', text: m.text })}>复制</button>
+          {onRemember && <button className="act" title="把这条回复整理成一条项目记忆草稿，确认后写入 .agentdesk/memory.md" onClick={onRemember}>记住这个</button>}
           {m.actualModels && m.actualModels.length > 0 && <span className="meta muted">{m.actualModels.join(' · ')}</span>}
         </div>
       )}

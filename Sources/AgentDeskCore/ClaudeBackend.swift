@@ -190,15 +190,18 @@ public struct ClaudeBackend: AgentBackend, Sendable {
     /// prompt snapshot is off so an edited rule applies from the next turn
     /// rather than after the next compaction. In a project, `AGENTS.md`
     /// loads beside `CLAUDE.md` (once when `CLAUDE.md` already imports it).
+    /// Auto memory is off in both modes (`settingsJSON`).
     static func ruleArguments(instructions: String?, project: Bool) throws -> [String] {
-        var arguments = ["--system-prompt-snapshot", "off"]
-        if project { arguments += ["--settings", try settingsJSON(project: project)] }
+        var arguments = ["--system-prompt-snapshot", "off", "--settings", try settingsJSON(project: project)]
         if let instructions, !instructions.isEmpty { arguments += ["--append-system-prompt", instructions] }
         return arguments
     }
 
+    /// Claude's own auto memory stays off: the project memory is
+    /// AgentDesk's `.agentdesk/memory.md`, the same for every CLI.
     static func settingsJSON(project: Bool) throws -> String {
-        let settings: [String: Any] = ["instructionFiles": "claude-md-and-agents-md"]
+        var settings: [String: Any] = ["autoMemoryEnabled": false]
+        if project { settings["instructionFiles"] = "claude-md-and-agents-md" }
         return String(decoding: try JSONSerialization.data(withJSONObject: settings, options: [.sortedKeys]), as: UTF8.self)
     }
 

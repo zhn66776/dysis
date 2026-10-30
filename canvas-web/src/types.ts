@@ -97,6 +97,10 @@ export interface Quota { windows: QuotaWindow[]; status?: string; updatedAt: num
 export interface DraftFile { id: string; name: string; kind: FileKind; bytes: number }
 export interface Draft { sessionID: string; files: DraftFile[]; importing: boolean }
 
+/** The open panel's project memory (.agentdesk/memory.md) and the drafts waiting for this node. */
+export interface MemoryDraft { id: string; text: string; author: string; fromModel: boolean; reason?: string }
+export interface MemoryPayload { sessionID: string; available: boolean; entries: number; characters: number; budget: number; drafts: MemoryDraft[] }
+
 export interface MessagePayload {
   id: string
   role: 'user' | 'assistant'
@@ -124,6 +128,7 @@ export interface StatePayload {
   models?: Partial<Record<Provider, ModelOption[]>>
   quotas?: Partial<Record<Provider, Quota>>
   drafts?: Draft[]
+  memory?: MemoryPayload
   chain: Chain
   running: string[]
   error: string
@@ -187,6 +192,9 @@ export type Command =
   | { type: 'app.open'; window: 'settings' | 'classic' | 'mcp'; sessionID?: string }
   | { type: 'app.open'; window: 'project'; boardID: string }
   | { type: 'session.setRules'; sessionID: string; text: string }
+  | { type: 'memory.remember'; boardID: string; nodeID: string; messageID: string }
+  | { type: 'memory.confirm'; id: string; text: string }
+  | { type: 'memory.discard'; id: string }
   | { type: 'error.dismiss' }
   | { type: 'session.setModel'; sessionID: string; modelID: string }
   | { type: 'session.setEffort'; sessionID: string; effort: string | null }
@@ -218,5 +226,7 @@ export interface AppState {
   models: Partial<Record<Provider, ModelOption[]>>
   quotas: Partial<Record<Provider, Quota>>
   drafts: Record<string, Draft>
+  /** Latest memory state Swift sent for an open panel; check sessionID before use. */
+  memory?: MemoryPayload
   chain: Chain
 }

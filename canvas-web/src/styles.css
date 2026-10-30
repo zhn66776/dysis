@@ -368,3 +368,13 @@ input, textarea { font: inherit; color: var(--tx); }
 .rule-sources .context-input { max-height: 160px; }
 .btn.primary { background: var(--primary); border-color: var(--primary); color: var(--on-primary); font-weight: 500; }
 .btn.primary:disabled { opacity: 0.5; }
+
+/* Project memory drafts (design/HARNESS.md H5). */
+.memory-drafts { margin: 8px 14px 0; display: flex; flex-direction: column; gap: 8px; max-height: 280px; overflow: auto; }
+.memory-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.memory-warn { font-size: 12px; color: #93590E; border: 1px solid var(--bd2); border-radius: 8px; padding: 6px 8px; }
+.memory-draft { border: 1px dashed var(--bd2); border-radius: 9px; padding: 8px; display: flex; flex-direction: column; gap: 6px; background: var(--card); }
+.memory-draft textarea { width: 100%; box-sizing: border-box; resize: vertical; font: inherit; font-size: 12px; padding: 6px 8px; border: 1px solid var(--bd2); border-radius: 7px; background: var(--panel); color: var(--tx); }
+.memory-draft .row { display: flex; gap: 6px; align-items: center; }
+.memory-draft .btn, .node-rules-pop .btn, .memory-head .act { white-space: nowrap; flex: none; }
+@media (prefers-color-scheme: dark) { .memory-warn { color: #EF9F27; } }

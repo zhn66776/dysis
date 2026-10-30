@@ -6,7 +6,7 @@ import Foundation
 /// rules. Each CLI reads what it can natively; the rest is injected through
 /// one channel per CLI (Claude `--append-system-prompt`, Codex
 /// `developerInstructions`, a leading block for Cursor).
-public enum RuleLayer: String, Codable, Sendable { case global, project, node }
+public enum RuleLayer: String, Codable, Sendable { case global, project, memory, node }
 
 /// How one layer reaches the model this turn.
 public enum RuleDelivery: String, Codable, Sendable {
@@ -64,6 +64,7 @@ public struct ProjectRules: Equatable, Sendable {
     public static let agentsFile = "AGENTS.md"
     public static let claudeFile = "CLAUDE.md"
     public static let claudeImportLine = "@AGENTS.md"
+    public static let memoryImportLine = "@" + ProjectMemory.relativePath
 
     public let folder: URL
     /// nil when the project has no `AGENTS.md`.
@@ -84,6 +85,9 @@ public struct ProjectRules: Equatable, Sendable {
     public var agentsURL: URL { folder.appendingPathComponent(Self.agentsFile) }
     public var claudeURL: URL { folder.appendingPathComponent(Self.claudeFile) }
 
+    /// `AGENTS.md` imports the project memory (`@.agentdesk/memory.md`).
+    public var agentsReferenceMemory: Bool { agents.map { Self.imports($0, file: ProjectMemory.relativePath) } ?? false }
+
     /// Claude Code's `@path` import: `@file` or `@./file` as its own word.
     static func imports(_ text: String, file: String) -> Bool {
         let escaped = NSRegularExpression.escapedPattern(for: file)
@@ -102,6 +106,22 @@ public struct ProjectRules: Equatable, Sendable {
         guard !FileManager.default.fileExists(atPath: url.path) else { throw HarnessRulesError.claudeFileExists }
         // withoutOverwriting: a file that appeared in the meantime is kept.
         try Data((claudeImportLine + "\n").utf8).write(to: url, options: .withoutOverwriting)
+    }
+
+    /// Adds `@.agentdesk/memory.md` at the end of `AGENTS.md` (creating it
+    /// when missing) so a CLI that expands imports reads the memory.
+    /// Returns whether the file changed.
+    @discardableResult
+    public static func addMemoryReference(in folder: URL) throws -> Bool {
+        let url = folder.appendingPathComponent(agentsFile)
+        let existing = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
+        guard !imports(existing, file: ProjectMemory.relativePath) else { return false }
+        var text = existing
+        if !text.isEmpty && !text.hasSuffix("\n") { text += "\n" }
+        if !text.isEmpty { text += "\n" }
+        text += "<!-- AgentDesk 项目记忆，确认过的条目在这个文件里 -->\n\(memoryImportLine)\n"
+        try text.write(to: url, atomically: true, encoding: .utf8)
+        return true
     }
 }
 
@@ -126,8 +146,12 @@ public enum RuleLayers {
         provider == .claude ? projectAccess : true
     }
 
+    /// Only Claude Code expands `@file` lines; Codex and Cursor get the
+    /// memory as an appendix to the project rules.
+    public static func expandsImports(_ provider: ProviderID) -> Bool { provider == .claude }
+
     /// Builds this turn's rules. `project` is nil outside a project board.
-    public static func compose(provider: ProviderID, projectAccess: Bool, global: String, project: ProjectRules?, node: String) -> ComposedRules {
+    public static func compose(provider: ProviderID, projectAccess: Bool, global: String, project: ProjectRules?, memory: String? = nil, node: String) -> ComposedRules {
         var blocks: [(String, String)] = []
         var sources: [RuleSource] = []
         let global = global.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -148,6 +172,18 @@ public enum RuleLayers {
                     blocks.append(("项目规则（AGENTS.md）", agents))
                     sources.append(RuleSource(layer: .project, title: "项目规则", path: project.agentsURL.path, characters: agents.count, delivery: .injected,
                                               note: "聊天模式下 Claude Code 不读项目文件，由 AgentDesk 注入"))
+                }
+            }
+            let memory = memory?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if !memory.isEmpty {
+                let path = project.folder.appendingPathComponent(ProjectMemory.relativePath).path
+                let over = ProjectMemory.isOverBudget(memory) ? "；超过 \(ProjectMemory.budget.formatted()) 字，建议整理" : ""
+                if native && expandsImports(provider) && project.agentsReferenceMemory {
+                    sources.append(RuleSource(layer: .memory, title: "项目记忆", path: path, characters: memory.count, delivery: .native, note: "AGENTS.md 的 \(ProjectRules.memoryImportLine) 引用" + over))
+                } else {
+                    blocks.append(("项目记忆（\(ProjectMemory.relativePath)）", memory))
+                    let why = expandsImports(provider) ? (native ? "AGENTS.md 没有引用记忆，由 AgentDesk 注入" : "聊天模式下由 AgentDesk 注入") : "\(provider.runtimeName) 不展开 @ 引用，作为项目规则的附录注入"
+                    sources.append(RuleSource(layer: .memory, title: "项目记忆", path: path, characters: memory.count, delivery: .injected, note: why + over))
                 }
             }
         }

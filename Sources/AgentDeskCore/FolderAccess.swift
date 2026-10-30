@@ -12,10 +12,15 @@ public enum FolderAccessPolicy {
     public static let toolTimeoutSeconds = 180
     public static let modelNote = "To read the user's local files, use the agentdesk_files tools; AgentDesk asks the user before each new folder. If the user declines, do not retry another path for the same data."
 
-    /// The server for one conversation, or nil when the helper is not installed.
-    public static func server(helper: URL, dataRoot: URL, sessionID: UUID, token: String) -> AgentMCPServer? {
-        guard FileManager.default.isExecutableFile(atPath: helper.path) else { return nil }
-        return AgentMCPServer(name: serverName, transport: .stdio(command: helper.path, arguments: ["--data", dataRoot.path, "--session", sessionID.uuidString, "--token", token]))
+    /// The server for one conversation, or nil when the helper is not
+    /// installed. `files` offers the folder tools; `project` adds
+    /// `memory_propose` for that project's memory.
+    public static func server(helper: URL, dataRoot: URL, sessionID: UUID, token: String, files: Bool = true, project: URL? = nil) -> AgentMCPServer? {
+        guard FileManager.default.isExecutableFile(atPath: helper.path), files || project != nil else { return nil }
+        var arguments = ["--data", dataRoot.path, "--session", sessionID.uuidString, "--token", token]
+        if !files { arguments.append("--no-files") }
+        if let project { arguments += ["--project", project.path] }
+        return AgentMCPServer(name: serverName, transport: .stdio(command: helper.path, arguments: arguments))
     }
 
     public static func resolve(_ raw: String, home: URL = FileManager.default.homeDirectoryForCurrentUser) -> URL {
@@ -233,10 +238,27 @@ public final class FolderAccessServer {
     let token: String
     let home: URL
     let timeout: TimeInterval
+    let files: Bool
+    /// The project whose memory `memory_propose` drafts for; nil offers no memory tool.
+    let project: URL?
 
-    public init(exchange: FolderAccessExchange, sessionID: UUID, token: String, home: URL = FileManager.default.homeDirectoryForCurrentUser, timeout: TimeInterval = FolderAccessPolicy.approvalTimeout) {
+    public init(exchange: FolderAccessExchange, sessionID: UUID, token: String, home: URL = FileManager.default.homeDirectoryForCurrentUser, timeout: TimeInterval = FolderAccessPolicy.approvalTimeout, files: Bool = true, project: URL? = nil) {
         self.exchange = exchange; self.sessionID = sessionID; self.token = token; self.home = home; self.timeout = timeout
+        self.files = files; self.project = project
     }
+
+    /// Drafts only: the app shows the entry and writes it when the user confirms.
+    public static let memoryTool: [String: Any] = [
+        "name": "memory_propose",
+        "description": "建议把一条值得长期记住的项目信息（约定、决定、踩过的坑）记进项目记忆 .agentdesk/memory.md。只是草稿：AgentDesk 把它显示给用户，用户确认后才写入；之后这个项目里的所有对话都会读到。只在回合末尾、真正有长期价值时用，一次一条，简短具体，不要记临时状态或密钥。",
+        "inputSchema": ["type": "object", "properties": [
+            "text": ["type": "string", "description": "要记住的内容，一两句话，最多 1000 字。"],
+            "reason": ["type": "string", "description": "一句话说明为什么值得记住，会显示给用户。"]
+        ], "required": ["text"]],
+        "annotations": ["readOnlyHint": true, "openWorldHint": false]
+    ]
+
+    public var tools: [[String: Any]] { (files ? Self.tools : []) + (project != nil ? [Self.memoryTool] : []) }
 
     public static let tools: [[String: Any]] = {
         let reason: [String: Any] = ["type": "string", "description": "一句话说明为什么需要读这里，会显示给用户。"]
@@ -261,8 +283,10 @@ public final class FolderAccessServer {
         case "initialize":
             result = ["protocolVersion": params["protocolVersion"] as? String ?? "2025-06-18", "capabilities": ["tools": [:]],
                       "serverInfo": ["name": "agentdesk-files", "version": "1"],
-                      "instructions": "用这些工具读取用户电脑上的文件。每个新文件夹都会先征求用户同意；用户拒绝后不要换路径重试。"]
-        case "tools/list": result = ["tools": Self.tools]
+                      "instructions": [files ? "用这些工具读取用户电脑上的文件。每个新文件夹都会先征求用户同意；用户拒绝后不要换路径重试。" : nil,
+                                       project != nil ? "发现值得长期记住的项目信息时，在回合末尾用 memory_propose 提出一条草稿，用户确认后才会写入项目记忆。" : nil]
+                        .compactMap { $0 }.joined(separator: " ")]
+        case "tools/list": result = ["tools": tools]
         case "tools/call": result = call(params["name"] as? String ?? "", params["arguments"] as? [String: Any] ?? [:])
         case "ping": result = [:]
         default:
@@ -275,7 +299,10 @@ public final class FolderAccessServer {
         do {
             let reason = arguments["reason"] as? String
             let text: String
+            if !files, name != "memory_propose" { throw FolderAccessError.unreadable("没有这个工具：\(name)") }
             switch name {
+            case "memory_propose":
+                text = try propose(arguments["text"], reason: reason)
             case "list_directory":
                 text = try FolderReader.list(try authorize(arguments["path"], tool: name, reason: reason), home: home)
             case "read_file":
@@ -288,6 +315,15 @@ public final class FolderAccessServer {
         } catch {
             return ["content": [["type": "text", "text": error.localizedDescription]], "isError": true]
         }
+    }
+
+    func propose(_ raw: Any?, reason: String?) throws -> String {
+        guard project != nil else { throw FolderAccessError.unreadable("没有这个工具：memory_propose") }
+        let text = (raw as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { throw FolderAccessError.unreadable("缺少要记住的内容。") }
+        guard text.count <= ProjectMemory.maxEntryCharacters else { throw FolderAccessError.unreadable("太长了：一条记忆最多 \(ProjectMemory.maxEntryCharacters) 字，请缩短后再提。") }
+        try MemoryProposalExchange(root: exchange.root).post(MemoryProposal(token: token, sessionID: sessionID, text: text, reason: reason.map { String($0.prefix(300)) }))
+        return "已作为草稿交给用户。用户确认后才会写入项目记忆；不用等待，也不要重复提出同一条。"
     }
 
     /// The resolved path when this conversation may read it, asking the app first when needed.

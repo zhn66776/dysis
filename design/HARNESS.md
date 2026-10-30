@@ -213,6 +213,8 @@
 
 ### H5 · 项目记忆
 
+> **状态（2026-10-30，分支 `claude/harness-rules-memory-dd7429`）：已实现，离线测试通过；实际调用待验证（见下面“待实测”）。**
+
 原则：记忆**看得见、改得了、按项目隔离、由用户批准**。各家 CLI 藏在自己目录里的记忆继续关闭：Codex 保持 `features.memories=false`，Claude 在项目模式下通过 `--settings` 关掉自动记忆，避免三家各记一套、互相矛盾。
 
 - **存储**：项目根目录的 `.agentdesk/memory.md`，按条目组织，每条带来源节点、日期、作者（用户或模型）。项目被版本控制时，由用户决定是否提交它。
@@ -221,6 +223,19 @@
   - 模型在回合末尾提出“建议记住”的条目（通过 AgentDesk MCP 的 `memory.propose` 工具），以草稿形式显示在面板里，用户确认后才写入。这和画布的“模型建议的草稿节点”是同一种交互。
 - **读取**：在 `AGENTS.md` 末尾加一行引用 `@.agentdesk/memory.md`（Claude 会展开引用；Codex 和 Cursor 是否展开待验证，不展开的话就把记忆文件作为项目规则的附录注入）。记忆超过预算（例如 4,000 字）时提示用户整理，不自动删除。
 - **跨项目**：只有全局规则（H4 第一层），没有跨项目记忆。
+
+**实施记录**：
+- 条目格式：`### 日期 · 作者 · 来自「节点标题」(会话 ID 前 8 位)`，下一行是 `<!-- agentdesk-memory: ID -->`，然后是正文。作者是“用户”或“模型（Claude Code，sonnet）”。文件里用户自己写的其他内容原样保留；手写的 `### ` 条目也能列出和删除（没有标记时 ID 由标题算出）。`ProjectMemory`（`AgentDeskCore/ProjectMemory.swift`）。
+- “记住这个”：每条已完成的回复下面都有，只在项目画布上出现。点了之后在面板里生成一条可编辑的草稿，“保存到项目记忆”才写入。
+- `memory_propose`（MCP 工具名不能带点，所以不叫 `memory.propose`）：在 `agentdesk-files` 里，项目画布上的节点启动它时带 `--project <文件夹>`；文件夹读取关闭时加 `--no-files`，只剩这个工具。它只把草稿写进数据目录的 `memory-proposals/`（带本次启动的 token），立刻返回，不等用户。App 每秒取一次，显示为面板里的草稿（标明哪个模型建议、理由），确认后才写入。草稿只保留到 App 退出。
+- 第一次写入时，在 `AGENTS.md` 末尾加上 `@.agentdesk/memory.md`（没有 `AGENTS.md` 就新建）；用户删掉这一行后，项目设置里可以再加。
+- 读取：Claude Code 在信任的项目里展开 `@` 引用（`AGENTS.md` 由 `instructionFiles` 加载）；Codex 和 Cursor 不展开（Codex 把 `AGENTS.md` 当作普通 project doc，Cursor 的安装包里也没有展开 `@` 的逻辑），记忆作为项目规则的附录注入；Claude 在聊天模式或 `AGENTS.md` 没有引用时也由 AgentDesk 注入。上下文预览标明是哪一种。
+- 预算：整份文件超过 4,000 字时，面板和项目设置里提示整理，上下文预览里也标出；从不自动删除。项目设置里可以逐条删除。
+- 各家自己的记忆：Codex 保持 `features.memories=false`；Claude Code 两种模式都加 `--settings '{"autoMemoryEnabled":false,…}'`（设置名取自 2.1.308 安装包里的 schema：“When false, Claude will not read from or write to the auto-memory directory”；也有环境变量 `CLAUDE_CODE_DISABLE_AUTO_MEMORY`，没有用）。
+
+**界面检查**：网页部分（节点规则、“记住这个”、记忆草稿、上下文预览的规则列表）在浏览器预览（mock）里点过；`agentdesk-files --no-files --project` 用真实构建离线跑过一次 `initialize` / `tools/list` / `memory_propose`。原生部分（设置里的全局规则、项目设置面板）只编译通过，没有在运行中的 App 里看过。
+
+**待实测**（约 2 回合）：在项目画布的一个节点里让模型调用 `memory_propose`，确认草稿出现在面板里；保存后在另一个节点（换一家 CLI）问这条信息，确认读到了。另外确认 Claude 在 `--safe-mode` 下 `--settings` 和 `--append-system-prompt` 仍然生效，以及 `instructionFiles` 加载的 `AGENTS.md` 会展开 `@.agentdesk/memory.md`。
 
 验收：
 - 离线测试：解析和写入记忆条目、确认草稿、引用的生成。
@@ -246,7 +261,7 @@
 | Cursor 审批 | `--print` 是否有审批回调；它是否读 `AGENTS.md` | 查文档和 `--help`，再用 1 回合实际调用 |
 | worktree 与原生分叉 | 分叉的子会话换了工作目录后，官方 CLI 是否接受 | 两家各 1 回合 |
 | 磁盘和性能 | 大仓库每个节点一个 worktree | 先只在“询问 / 自动”档的写入节点创建，只读节点直接用项目目录 |
-| 记忆引用展开 | Codex 和 Cursor 是否展开 `@file` | 各 1 回合 |
+| 记忆引用展开 | Codex 和 Cursor 是否展开 `@file`（安装包里没有展开逻辑，H5 按不展开处理，改为注入附录） | 各 1 回合 |
 
 ## 5. 实施顺序与额度
 
@@ -257,6 +272,6 @@
 | H2 worktree | — | 中 | 约 4 回合 |
 | H3 过程可见与撤销 | H2（检查点依赖 worktree） | 大 | 约 3 回合 |
 | H4 统一规则（已实现，待实测） | — | 中 | 约 3 回合 |
-| H5 项目记忆 | H4 | 中 | 约 2 回合 |
+| H5 项目记忆（已实现，待实测） | H4 | 中 | 约 2 回合 |
 
 H1 和 H2 互不依赖，可以并行开发，例如放到两个分支或两个子会话；H3 在 H2 之后。每个阶段单独成一个分支，合进 `main` 前跑全部离线测试，并按 `AGENTS.md` 重新打包验证。
