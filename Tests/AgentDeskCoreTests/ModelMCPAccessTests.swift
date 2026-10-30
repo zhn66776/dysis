@@ -134,6 +134,16 @@ final class ModelMCPAccessTests: XCTestCase {
         XCTAssertNotNil(search.mcpToolCall)
         XCTAssertFalse(search.builtInToolSucceeded)
         XCTAssertTrue(CursorJSONEventParser.parse(["type": "tool_call", "subtype": "started", "tool_call": ["readToolCall": ["args": read]]]).isToolCallStart)
+        let filteredGlob = CursorJSONEventParser.parse(["type": "tool_call", "subtype": "completed",
+                                                        "tool_call": ["globToolCall": ["args": [:], "result": ["success": ["files": [], "totalFiles": 8000]]]]])
+        XCTAssertFalse(filteredGlob.builtInToolSucceeded, "Read deny empties glob results")
+        let filteredGrep: [String: Any] = ["workspaceResults": ["/w": ["content": ["matches": [], "totalLines": 0]]]]
+        XCTAssertFalse(CursorJSONEventParser.parse(["type": "tool_call", "subtype": "completed",
+                                                    "tool_call": ["grepToolCall": ["args": [:], "result": ["success": filteredGrep]]]]).builtInToolSucceeded)
+        XCTAssertTrue(CursorJSONEventParser.parse(["type": "tool_call", "subtype": "completed",
+                                                   "tool_call": ["globToolCall": ["args": [:], "result": ["success": ["files": ["/w/a.md"]]]]]]).builtInToolSucceeded)
+        XCTAssertEqual(CursorBackend.prompt("hi", mcpServers: []), "hi")
+        XCTAssertTrue(CursorBackend.prompt("hi", mcpServers: ["portfolio"]).contains("portfolio"))
     }
 
     func testCursorWorkspaceConfigFollowsTheOpenedServers() throws {

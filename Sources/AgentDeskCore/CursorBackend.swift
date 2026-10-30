@@ -40,7 +40,7 @@ public struct CursorBackend: AgentBackend, Sendable {
                     if let remoteID = request.remoteSessionID, !remoteID.isEmpty {
                         arguments += ["--resume", remoteID]
                     }
-                    arguments += [request.prompt]
+                    arguments += [CursorBackend.prompt(request.prompt, mcpServers: allowedMCP)]
                     let process = CLIProcess(
                         executable: request.executableURL,
                         arguments: arguments,
@@ -131,6 +131,14 @@ public struct CursorBackend: AgentBackend, Sendable {
         try JSONSerialization.data(withJSONObject: ["mcpServers": map], options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]).write(to: url, options: .atomic)
         let allow = servers.map { "Mcp(\($0.name):*)" }
         try JSONSerialization.data(withJSONObject: ["permissions": ["allow": allow, "deny": deniedBuiltInTools]], options: [.prettyPrinted, .sortedKeys]).write(to: permissions, options: .atomic)
+    }
+
+    /// Cursor has no system prompt flag; a short note ahead of the user's
+    /// message names the opened servers, so the model goes to them rather
+    /// than searching the disk.
+    static func prompt(_ text: String, mcpServers: [String]) -> String {
+        guard !mcpServers.isEmpty else { return text }
+        return "[AgentDesk：本轮可以用这些 MCP 服务器的工具：\(mcpServers.joined(separator: "、"))。本地文件、文件搜索和命令都不可用，需要数据时调用这些 MCP 工具。]\n\n" + text
     }
 
     static let deniedBuiltInTools = ["Read(**)", "Write(**)", "Shell(*)"]
@@ -224,7 +232,9 @@ public enum CursorJSONEventParser {
                 event.builtInTool = call.keys.first { $0.hasSuffix("ToolCall") }.map { String($0.dropLast("ToolCall".count)) }
             }
             if event.mcpToolCall == nil, object["subtype"] as? String == "completed" {
-                event.builtInToolSucceeded = call.values.contains { (($0 as? [String: Any])?["result"] as? [String: Any])?["success"] != nil }
+                event.builtInToolSucceeded = call.values.contains {
+                    ((($0 as? [String: Any])?["result"] as? [String: Any])?["success"]).map(CursorJSONEventParser.revealsContent) ?? false
+                }
             }
         }
         if type == "result" || type == "final" {
@@ -236,6 +246,22 @@ public enum CursorJSONEventParser {
         }
         if type == "system", let subtype = object["subtype"] as? String { event.status = subtype }
         return event
+    }
+
+    /// The denied Read permission filters glob and grep instead of failing
+    /// them: a success with only empty `files` / `matches` showed nothing.
+    /// Any other success counts as content.
+    static func revealsContent(_ success: Any) -> Bool {
+        var lists: [[Any]] = []
+        func walk(_ value: Any) {
+            if let dict = value as? [String: Any] {
+                for (key, item) in dict {
+                    if key == "files" || key == "matches", let list = item as? [Any] { lists.append(list) } else { walk(item) }
+                }
+            } else if let array = value as? [Any] { array.forEach(walk) }
+        }
+        walk(success)
+        return lists.isEmpty || lists.contains { !$0.isEmpty }
     }
 
     private static func assistantText(_ object: [String: Any]) -> String? {
