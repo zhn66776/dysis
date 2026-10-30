@@ -292,3 +292,28 @@ input, textarea { font: inherit; color: var(--tx); }
 .search-result-title small { margin-left: auto; white-space: nowrap; color: var(--mu); font-size: 10px; }
 .search-excerpt { color: var(--mu); font-size: 11px; line-height: 1.5; overflow-wrap: anywhere; }
 @media (max-width: 1050px) { .canvas-title { max-width: 130px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } .merge-bar { position: absolute; top: 44px; right: 0; } }
+
+/* Persistent visual groups, canvas edit history, and the navigation map. */
+:root { --group-bg: rgba(196, 181, 134, .12); --group-border: #AAA17E; --map-group: #E2DDCB; --map-mask: rgba(241, 239, 232, .65); }
+@media (prefers-color-scheme: dark) { :root { --group-bg: rgba(203, 189, 151, .045); --group-border: #706951; --map-group: #353126; --map-mask: rgba(18, 18, 18, .7); } }
+.canvas-tools { position: absolute; top: 52px; left: 14px; display: flex; align-items: center; flex-wrap: wrap; gap: 6px; z-index: 6; }
+.chrome-inset .canvas-tools { top: calc(var(--chrome-top) + 12px); }
+.canvas-tools .btn:disabled { opacity: .35; cursor: default; }
+.canvas-tools .btn[aria-pressed="true"] { background: var(--sel); }
+.history-btn { font-size: 17px; line-height: 18px; padding: 4px 9px; }
+.tool-divider { width: 1px; height: 18px; background: var(--bd2); margin: 0 2px; }
+.group-picker .dd-button { padding: 5px 10px; }
+.canvas > .merge-bar { position: absolute; top: auto; right: auto; bottom: 56px; left: 50%; transform: translateX(-50%); max-width: calc(100% - 24px); flex-wrap: wrap; justify-content: center; z-index: 8; }
+.react-flow__minimap { border: 1px solid var(--bd2); border-radius: 9px; overflow: hidden; box-shadow: 0 3px 14px #0002; }
+.app:has(.react-flow__minimap) .preview-badge { bottom: 170px; }
+.react-flow__node-groupFrame { pointer-events: none; }
+.group-frame { width: 100%; height: 100%; background: var(--group-bg); border: 1px dashed var(--group-border); border-radius: 12px; }
+.group-handle { display: flex; align-items: center; gap: 8px; height: 36px; padding: 4px 12px; pointer-events: auto; cursor: grab; color: var(--mu); }
+.group-handle:active { cursor: grabbing; }
+.group-grip { font-size: 19px; color: var(--group-border); }
+.group-title { background: transparent; border: 0; padding: 2px 0; font-size: 13px; color: var(--tx); text-align: left; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.group-title:hover { text-decoration: underline; text-underline-offset: 3px; }
+.group-count { font-size: 11px; white-space: nowrap; margin-left: auto; }
+.group-dissolve { background: transparent; border: 1px solid transparent; color: var(--mu); font-size: 11px; padding: 2px 6px; border-radius: 5px; }
+.group-dissolve:hover { background: var(--card); border-color: var(--bd2); color: var(--tx); }
+.group-rename { width: 160px; min-width: 30px; background: var(--card); border: 1px solid var(--bd2); border-radius: 4px; padding: 1px 4px; font-size: 13px; }

@@ -36,11 +36,17 @@ export interface EdgePayload {
   pending?: boolean
 }
 
+export interface CanvasGroup { id: string; title: string; nodeIDs: string[] }
+export interface CanvasHistory { undoLabel?: string; redoLabel?: string }
+export interface NodeSize { nodeID: string; width: number; height: number }
+
 export interface BoardPayload {
   id: string
   title: string
   nodes: NodePayload[]
   edges: EdgePayload[]
+  groups?: CanvasGroup[]
+  history?: CanvasHistory
   viewport?: { x: number; y: number; zoom: number }
 }
 
@@ -101,6 +107,7 @@ export interface StatePayload {
   chain: Chain
   running: string[]
   error: string
+  fitBoardID?: string
   focusNodeID?: string
 }
 
@@ -122,6 +129,12 @@ export type Incoming = StatePayload | ComposerInsert | ConfirmShow | ChromeInset
 export type Command =
   | { type: 'ready' }
   | { type: 'board.create' }
+  | { type: 'board.layout'; boardID: string; sizes: NodeSize[] }
+  | { type: 'board.undo' | 'board.redo'; boardID: string }
+  | { type: 'group.create'; boardID: string; nodeIDs: string[] }
+  | { type: 'group.add'; boardID: string; groupID: string; nodeIDs: string[] }
+  | { type: 'group.rename'; boardID: string; groupID: string; title: string }
+  | { type: 'group.dissolve'; boardID: string; groupID: string }
   | { type: 'board.select'; boardID: string }
   | { type: 'board.rename'; boardID: string; title: string }
   | { type: 'board.delete'; boardID: string }
@@ -162,6 +175,7 @@ export interface AppState {
   details: Record<string, SessionDetail>
   running: Set<string>
   error: string
+  fitBoardID?: string
   focusNodeID?: string
   models: Partial<Record<Provider, ModelOption[]>>
   quotas: Partial<Record<Provider, Quota>>

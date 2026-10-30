@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
-  Background, BackgroundVariant, Controls, MarkerType, ReactFlow, useReactFlow,
+  Background, BackgroundVariant, Controls, MarkerType, MiniMap, ReactFlow, useReactFlow,
   applyEdgeChanges, applyNodeChanges,
   type Edge, type EdgeChange, type NodeChange, type OnBeforeDelete, type OnConnectEnd, type Viewport,
 } from '@xyflow/react'
 import { send } from './bridge'
+import { GroupNode, type GroupFlowNode } from './GroupNode'
+import { canvasHistoryAction, groupBounds } from './organize'
 import { ChatNode, type ChatFlowNode } from './ChatNode'
 import { CanvasSearch } from './CanvasSearch'
 import { latestReadable } from './interactions'
@@ -18,7 +20,8 @@ const templates: { id: MergeTemplate; label: string; hint: string }[] = [
   { id: 'critique', label: '挑错', hint: '找错误、漏洞和风险，按严重程度排序' },
 ]
 
-const nodeTypes = { chat: ChatNode }
+type CanvasFlowNode = ChatFlowNode | GroupFlowNode
+const nodeTypes = { chat: ChatNode, groupFrame: GroupNode }
 
 interface Menu { clientX: number; clientY: number; connectFrom?: string }
 
@@ -35,6 +38,35 @@ export function Canvas({ state, selectedNodeID, onSelect, expanded, onExpand, on
   const [mergeProvider, setMergeProvider] = useState<Provider>('claude')
   // Nodes picked for merging: ⌘/Shift/Ctrl-click toggles, a box selection replaces.
   const [picked, setPicked] = useState<string[]>([])
+  const [showMap, setShowMap] = useState(true)
+  const groupDrag = useRef<{ id: string; x: number; y: number; members: Map<string, { x: number; y: number }> } | null>(null)
+  const displayNodes = useMemo<CanvasFlowNode[]>(() => {
+    const frames: GroupFlowNode[] = (board.groups ?? []).flatMap(group => {
+      const bounds = groupBounds(group, nodes)
+      return bounds ? [{ id: `group:${group.id}`, type: 'groupFrame' as const, position: { x: bounds.x, y: bounds.y },
+        width: bounds.width, height: bounds.height, style: { width: bounds.width, height: bounds.height },
+        zIndex: -1, selectable: false, deletable: false, draggable: true, dragHandle: '.group-handle',
+        data: { groupID: group.id, boardID: board.id, title: group.title, count: group.nodeIDs.length },
+      }] : []
+    })
+    return [...frames, ...nodes]
+  }, [board.groups, board.id, nodes])
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const editing = Boolean((e.target as HTMLElement | null)?.closest('input, textarea, select, [contenteditable="true"], [role="textbox"]'))
+      const action = canvasHistoryAction(e.key, e.metaKey || e.ctrlKey, e.shiftKey, editing, Boolean(document.querySelector('[aria-modal="true"]')))
+      if (!action || e.isComposing) return
+      e.preventDefault(); e.stopPropagation()
+      send({ type: action, boardID: board.id })
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [board.id])
+  useEffect(() => {
+    if (state.fitBoardID !== board.id) return
+    const timer = window.setTimeout(() => void flow.fitView({ duration: 300, padding: 0.2, maxZoom: 1 }), 100)
+    return () => window.clearTimeout(timer)
+  }, [state.fitBoardID, board.id])
 
   const actions = useRef({ onExpand, onFollowUp })
   actions.current = { onExpand, onFollowUp }
@@ -111,16 +143,16 @@ export function Canvas({ state, selectedNodeID, onSelect, expanded, onExpand, on
     })
   }, [board.edges, state.summaries, state.running, sessionOfNode])
 
-  const onNodesChange = useCallback((changes: NodeChange<ChatFlowNode>[]) => {
+  const onNodesChange = useCallback((changes: NodeChange<CanvasFlowNode>[]) => {
     // Removal goes through Swift (native confirmation); apply the rest locally.
-    setNodes(ns => applyNodeChanges(changes.filter(c => c.type !== 'remove'), ns))
+    setNodes(ns => applyNodeChanges(changes.filter(c => c.type !== 'remove' && 'id' in c && ns.some(n => n.id === c.id)) as NodeChange<ChatFlowNode>[], ns))
   }, [])
   const onEdgesChange = useCallback((changes: EdgeChange[]) => {
     setEdges(es => applyEdgeChanges(changes.filter(c => c.type !== 'remove'), es))
   }, [])
 
-  const onBeforeDelete: OnBeforeDelete<ChatFlowNode> = useCallback(async ({ nodes: ns, edges: es }) => {
-    const nodeIDs = ns.map(n => n.id)
+  const onBeforeDelete: OnBeforeDelete<CanvasFlowNode> = useCallback(async ({ nodes: ns, edges: es }) => {
+    const nodeIDs = ns.filter(n => n.type === 'chat').map(n => n.id)
     const edgeIDs = es.filter(e => !nodeIDs.includes(e.source) && !nodeIDs.includes(e.target)).map(e => e.id)
     if (nodeIDs.length) send({ type: 'node.delete', boardID: board.id, nodeIDs })
     if (edgeIDs.length) send({ type: 'edge.delete', boardID: board.id, edgeIDs })
@@ -163,7 +195,7 @@ export function Canvas({ state, selectedNodeID, onSelect, expanded, onExpand, on
     >
       <ReactFlow
         key={board.id}
-        nodes={nodes}
+        nodes={displayNodes}
         edges={edges}
         nodeTypes={nodeTypes}
         onNodesChange={onNodesChange}
@@ -173,6 +205,7 @@ export function Canvas({ state, selectedNodeID, onSelect, expanded, onExpand, on
         onConnectEnd={onConnectEnd}
         isValidConnection={c => c.source !== c.target}
         onNodeClick={(e, n) => {
+          if (n.type !== 'chat') return
           setMenu(null)
           if (e.metaKey || e.shiftKey || e.ctrlKey) {
             setPicked(p => {
@@ -184,9 +217,35 @@ export function Canvas({ state, selectedNodeID, onSelect, expanded, onExpand, on
             onSelect(n.id)
           }
         }}
-        onSelectionChange={({ nodes: ns }) => { if (ns.length >= 2) setPicked(ns.map(n => n.id)) }}
+        onSelectionChange={({ nodes: ns }) => { const chats = ns.filter(n => n.type === 'chat'); if (chats.length >= 2) setPicked(chats.map(n => n.id)) }}
         onPaneClick={() => { onSelect(null); setMenu(null); setPicked([]) }}
-        onNodeDragStop={(_, __, dragged) => send({ type: 'node.move', boardID: board.id, positions: dragged.map(n => ({ nodeID: n.id, x: Math.round(n.position.x), y: Math.round(n.position.y) })) })}
+        onNodeDragStart={(_, n) => {
+          if (n.type !== 'groupFrame') return
+          const group = board.groups?.find(g => `group:${g.id}` === n.id)
+          groupDrag.current = { id: n.id, x: n.position.x, y: n.position.y,
+            members: new Map(nodes.filter(node => group?.nodeIDs.includes(node.id)).map(node => [node.id, { ...node.position }])),
+          }
+        }}
+        onNodeDrag={(_, n) => {
+          const drag = groupDrag.current
+          if (!drag || drag.id !== n.id) return
+          const dx = n.position.x - drag.x, dy = n.position.y - drag.y
+          setNodes(ns => ns.map(node => {
+            const origin = drag.members.get(node.id)
+            return origin ? { ...node, dragging: true, position: { x: origin.x + dx, y: origin.y + dy } } : node
+          }))
+        }}
+        onNodeDragStop={(_, n, dragged) => {
+          const drag = groupDrag.current
+          if (drag?.id === n.id) {
+            const dx = n.position.x - drag.x, dy = n.position.y - drag.y
+            send({ type: 'node.move', boardID: board.id, positions: [...drag.members].map(([nodeID, origin]) => ({ nodeID, x: Math.round(origin.x + dx), y: Math.round(origin.y + dy) })) })
+            setNodes(ns => ns.map(node => drag.members.has(node.id) ? { ...node, dragging: false } : node))
+            groupDrag.current = null
+          } else {
+            send({ type: 'node.move', boardID: board.id, positions: dragged.filter(node => node.type === 'chat').map(node => ({ nodeID: node.id, x: Math.round(node.position.x), y: Math.round(node.position.y) })) })
+          }
+        }}
         onMoveEnd={onMoveEnd}
         defaultViewport={board.viewport}
         fitView={!board.viewport}
@@ -199,6 +258,7 @@ export function Canvas({ state, selectedNodeID, onSelect, expanded, onExpand, on
       >
         <Background variant={BackgroundVariant.Dots} gap={18} size={1.2} color="var(--dot)" />
         <Controls showInteractive={false} position="bottom-left" />
+        {showMap && <MiniMap<CanvasFlowNode> pannable zoomable position="bottom-right" ariaLabel="画布小地图" nodeColor={n => n.type === 'chat' && n.data.summary ? providerColor[n.data.summary.provider] : 'var(--map-group)'} nodeStrokeColor="var(--bd2)" nodeStrokeWidth={2} maskColor="var(--map-mask)" bgColor="var(--card)" />}
       </ReactFlow>
 
       <div className="canvas-top" data-drag>
@@ -208,6 +268,29 @@ export function Canvas({ state, selectedNodeID, onSelect, expanded, onExpand, on
           onLocate(hit)
           window.setTimeout(() => void flow.fitView({ nodes: [{ id: hit.nodeID }], duration: 300, maxZoom: 1, padding: 0.5 }), 100)
         }} />
+        {runningChain && (
+          <div className="chain-bar">
+            <span>正在重跑 {Math.min(runningChain.index + 1, runningChain.total)} / {runningChain.total}</span>
+            <span className="muted">{state.summaries[board.nodes.find(n => n.id === runningChain.currentNodeID)?.sessionID ?? '']?.title}</span>
+            <button className="btn" onClick={() => send({ type: 'chain.stop' })}>停止</button>
+          </div>
+        )}
+        {state.running.size > 0 && <span className="running-count">{state.running.size} 个节点运行中</span>}
+        <button className="btn" onClick={openMenuAtCenter}>＋ 新节点</button>
+      </div>
+
+      <div className="canvas-tools" role="toolbar" aria-label="画布整理">
+        <button className="btn history-btn" aria-label="撤销画布编辑" disabled={!board.history?.undoLabel} title={board.history?.undoLabel ? `撤销${board.history.undoLabel} · ⌘Z` : '没有可撤销的画布编辑'} onClick={() => send({ type: 'board.undo', boardID: board.id })}>↶</button>
+        <button className="btn history-btn" aria-label="重做画布编辑" disabled={!board.history?.redoLabel} title={board.history?.redoLabel ? `重做${board.history.redoLabel} · ⇧⌘Z` : '没有可重做的画布编辑'} onClick={() => send({ type: 'board.redo', boardID: board.id })}>↷</button>
+        <span className="tool-divider" />
+        <button className="btn" disabled={!board.nodes.length} title="按依赖从左到右排列，保留分组；可以撤销" onClick={() => send({ type: 'board.layout', boardID: board.id, sizes: nodes.map(n => ({ nodeID: n.id, width: n.measured?.width ?? (expanded.includes(n.id) ? 320 : 240), height: n.measured?.height ?? 160 })) })}>自动布局</button>
+        <Dropdown className="group-picker" label="分组" disabled={!selectedIDs.length && !selectedNodeID} title="选中节点后创建分组或加入已有分组" items={[
+          { key: 'new', label: '创建分组', onSelect: () => send({ type: 'group.create', boardID: board.id, nodeIDs: selectedIDs.length ? selectedIDs : selectedNodeID ? [selectedNodeID] : [] }) },
+          ...(board.groups ?? []).map(g => ({ key: g.id, label: `加入「${g.title}」`, onSelect: () => send({ type: 'group.add', boardID: board.id, groupID: g.id, nodeIDs: selectedIDs.length ? selectedIDs : selectedNodeID ? [selectedNodeID] : [] }) })),
+        ]} />
+        <button className="btn" aria-pressed={showMap} onClick={() => setShowMap(v => !v)}>小地图</button>
+      </div>
+
         {selectedIDs.length >= 2 && (
           <div className="merge-bar">
             <span className="muted">已选 {selectedIDs.length} 个</span>
@@ -222,19 +305,9 @@ export function Canvas({ state, selectedNodeID, onSelect, expanded, onExpand, on
             ))}
           </div>
         )}
-        {runningChain && (
-          <div className="chain-bar">
-            <span>正在重跑 {Math.min(runningChain.index + 1, runningChain.total)} / {runningChain.total}</span>
-            <span className="muted">{state.summaries[board.nodes.find(n => n.id === runningChain.currentNodeID)?.sessionID ?? '']?.title}</span>
-            <button className="btn" onClick={() => send({ type: 'chain.stop' })}>停止</button>
-          </div>
-        )}
-        {state.running.size > 0 && <span className="running-count">{state.running.size} 个节点运行中</span>}
-        <button className="btn" onClick={openMenuAtCenter}>＋ 新节点</button>
-      </div>
 
       {board.nodes.length > 1 && selectedIDs.length < 2 && !runningChain && (
-        <div className="canvas-hint">⌘ 点选或 Shift 拖动框选多个节点，可以合并结论</div>
+        <div className="canvas-hint">⌘ 点选或 Shift 拖动框选多个节点，可以分组或合并结论</div>
       )}
 
       {board.nodes.length === 0 && (
