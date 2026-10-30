@@ -185,6 +185,22 @@ public struct MCPWorkbenchView: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 .themedCard()
+                HStack(alignment: .top, spacing: 12) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("让模型自己调用").font(Theme.sans(13, weight: .medium))
+                        Text("打开后，私聊和画布里的 Claude、Codex、Cursor 对话每次发送都会带上这个服务器的全部工具，由模型自己决定调用哪个，不用先在这里运行。模型的内置工具（命令、读写文件）仍然关闭；群聊不使用。")
+                            .font(Theme.sans(11))
+                            .foregroundStyle(Theme.muted)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    Spacer(minLength: 8)
+                    Toggle("让模型自己调用", isOn: Binding(get: { servers[index].modelAccess },
+                                                     set: { guard servers[index].modelAccess != $0 else { return }; servers[index].modelAccess = $0; persist() }))
+                        .labelsHidden()
+                        .toggleStyle(ThemedSwitchStyle())
+                        .fixedSize()
+                }
+                .themedCard()
                 HStack(spacing: 8) {
                     Button("测试连接") { test(index: index) }.buttonStyle(SecondaryButtonStyle()).disabled(running)
                     Button("发现工具") { discover(index: index) }.buttonStyle(SecondaryButtonStyle()).disabled(running)

@@ -140,6 +140,14 @@ final class AppModel: ObservableObject {
         catch { errorMessage = "设置未能保存：\(error.localizedDescription)" }
     }
 
+    /// MCP servers the user opened to the model (MCP 工具 → 让模型自己调用),
+    /// read on every send so a change applies to the next message.
+    private func modelMCPServers() -> [AgentMCPServer] {
+        let url = dataRoot.appendingPathComponent("mcp-servers.json")
+        guard let data = try? Data(contentsOf: url), let configs = try? JSONDecoder().decode([MCPServerConfiguration].self, from: data) else { return [] }
+        return AgentMCPServer.forModel(configs)
+    }
+
     func send(_ text: String) {
         guard let id = selectedSessionID else { return }
         send(text, to: id)
@@ -195,7 +203,7 @@ final class AppModel: ObservableObject {
         sessions[index].messages.append(ChatMessage(id: assistantID, role: .assistant, text: "", state: .streaming))
         sessions[index].updatedAt = Date()
         let session = sessions[index]
-        let request = AgentRequest(localSessionID: id, remoteSessionID: session.remoteSessionID, prompt: input, workingDirectory: URL(fileURLWithPath: session.workingDirectory), modelID: session.modelID, executableURL: executable, reasoningEffort: session.reasoningEffort, images: images, forkFrom: session.remoteSessionID == nil ? context.fork : nil)
+        let request = AgentRequest(localSessionID: id, remoteSessionID: session.remoteSessionID, prompt: input, workingDirectory: URL(fileURLWithPath: session.workingDirectory), modelID: session.modelID, executableURL: executable, reasoningEffort: session.reasoningEffort, images: images, forkFrom: session.remoteSessionID == nil ? context.fork : nil, mcpServers: modelMCPServers())
         let backend: any AgentBackend
         switch provider {
         case .claude: backend = ClaudeBackend()

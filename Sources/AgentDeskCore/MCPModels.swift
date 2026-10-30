@@ -97,17 +97,85 @@ public struct MCPServerConfiguration: Identifiable, Codable, Equatable, Sendable
     /// Names are copied from the current process environment only when a
     /// child server starts. Values are never persisted in this configuration.
     public var environmentVariableNames: [String]
+    /// Hand this server to the model CLIs of private and canvas chats, so the
+    /// model picks and calls its tools itself. Off until the user turns it on.
+    public var modelAccess: Bool
 
-    public init(id: UUID = UUID(), name: String = "新 MCP 服务器", transport: MCPTransport = .stdio(command: "", arguments: []), enabled: Bool = true, environmentVariableNames: [String] = []) {
+    public init(id: UUID = UUID(), name: String = "新 MCP 服务器", transport: MCPTransport = .stdio(command: "", arguments: []), enabled: Bool = true, environmentVariableNames: [String] = [], modelAccess: Bool = false) {
         self.id = id
         self.name = String(name.prefix(100))
         self.transport = transport
         self.enabled = enabled
         self.environmentVariableNames = environmentVariableNames.filter { Self.validEnvironmentName($0) }
+        self.modelAccess = modelAccess
+    }
+
+    private enum CodingKeys: String, CodingKey { case id, name, transport, enabled, environmentVariableNames, modelAccess }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(id: try c.decode(UUID.self, forKey: .id), name: try c.decode(String.self, forKey: .name),
+                  transport: try c.decode(MCPTransport.self, forKey: .transport), enabled: try c.decode(Bool.self, forKey: .enabled),
+                  environmentVariableNames: try c.decodeIfPresent([String].self, forKey: .environmentVariableNames) ?? [],
+                  modelAccess: try c.decodeIfPresent(Bool.self, forKey: .modelAccess) ?? false)
     }
 
     public static func validEnvironmentName(_ value: String) -> Bool {
         value.range(of: "^[A-Za-z_][A-Za-z0-9_]*$", options: .regularExpression) != nil
+    }
+}
+
+/// An MCP server handed to a model CLI for one turn. `name` is safe as a
+/// tool-name prefix and as a dotted Codex config key; the environment values
+/// are copied from the app process when the CLI starts, never persisted.
+public struct AgentMCPServer: Equatable, Sendable {
+    public var name: String
+    public var transport: MCPTransport
+    public var environment: [String: String]
+
+    public init(name: String, transport: MCPTransport, environment: [String: String] = [:]) {
+        self.name = name; self.transport = transport; self.environment = environment
+    }
+
+    /// Enabled servers the user opened to the model, with unique, safe names.
+    /// Servers without a command or URL are skipped.
+    public static func forModel(_ configurations: [MCPServerConfiguration], processEnvironment: [String: String] = ProcessInfo.processInfo.environment) -> [AgentMCPServer] {
+        var used = Set<String>()
+        return configurations.compactMap { config in
+            guard config.enabled, config.modelAccess else { return nil }
+            switch config.transport {
+            case .stdio(let command, _) where command.trimmingCharacters(in: .whitespaces).isEmpty: return nil
+            case .streamableHTTP(let url) where url.trimmingCharacters(in: .whitespaces).isEmpty: return nil
+            default: break
+            }
+            let base = safeName(config.name)
+            var name = base
+            var n = 2
+            while used.contains(name) { name = "\(base)_\(n)"; n += 1 }
+            used.insert(name)
+            var environment: [String: String] = [:]
+            for key in config.environmentVariableNames { if let value = processEnvironment[key] { environment[key] = value } }
+            return AgentMCPServer(name: name, transport: config.transport, environment: environment)
+        }
+    }
+
+    /// Lowercase ASCII letters, digits, `_` and `-`; anything else becomes `_`.
+    public static func safeName(_ raw: String) -> String {
+        let mapped = raw.lowercased().unicodeScalars.map { s -> Character in
+            (("a"..."z").contains(s) || ("0"..."9").contains(s) || s == "_" || s == "-") ? Character(s) : "_"
+        }
+        var name = String(mapped).trimmingCharacters(in: CharacterSet(charactersIn: "_-"))
+        while name.contains("__") { name = name.replacingOccurrences(of: "__", with: "_") }
+        return name.isEmpty ? "mcp" : String(name.prefix(40))
+    }
+}
+
+public enum MCPToolName {
+    /// "mcp__portfolio__list_holdings" → "portfolio · list_holdings".
+    public static func display(_ raw: String) -> String {
+        let parts = raw.components(separatedBy: "__")
+        guard parts.count >= 3, parts[0] == "mcp" else { return raw }
+        return "\(parts[1]) · \(parts[2...].joined(separator: "__"))"
     }
 }
 
