@@ -222,6 +222,8 @@ Provider 色（主色 / 浅色头部 / 深色头部）：
 | `edge.setDiff` | `boardID`、`edgeID`、`ok` | 数据线是否附带上游分支的 diff 摘要 |
 | `board.gitInit` | `boardID` | 确认后在项目文件夹里 `git init` 并做初始提交 |
 | `notice.dismiss` | — | 关闭 `state.notice` 提示 |
+| `turn.diff` | `id`、`sessionID`、`messageID` | 取这一回合的完整 diff（HARNESS.md H3），Swift 回 `turn.diff` |
+| `turn.undo` | `boardID`、`nodeID`、`messageID` | 确认后撤销这一回合：Codex 原地撤销，Claude / Cursor 从检查点新建分支 |
 
 Swift → 网页：`window.agentDesk.receive(payload)`
 
@@ -231,6 +233,8 @@ Swift → 网页：`window.agentDesk.receive(payload)`
 | `patch` | 摘要变化、被关注会话的新增或替换消息、文字增量（`append`） |
 | `composer.insert` | 把 MCP 结果插入某个节点的输入框 |
 | `confirm.show` | `id`、`title`、`detail`、`action`、`checkbox?`：在页面内显示确认框（删除画布、删除节点、重跑下游、合并到基础分支、初始化 git）；`checkbox` 是可选的勾选项，例如“同时删除分支” |
+| `turn.diff` | `id`、`sessionID`、`messageID`、`diff`：回答页面的 `turn.diff` 请求 |
+| 消息的 `steps` / `diffStat` / `undoable`，节点的 `changes` | 回复的工具步骤（命令、改文件、MCP、读取、搜索、网页；状态、退出码、截断的输出和 diff），本回合改动统计，是否有检查点；节点分支相对切出点的改动统计 |
 | `state` 里的 `notice` 和节点的 `worktree` | 中性提示（合并完成、本轮只读）；节点的 worktree 分支、基础分支、路径、是否已清理 |
 | `state` 里的 `models` / `quotas` / `drafts` | 各 provider 的模型选项、额度窗口、被关注会话的待发送文件 |
 

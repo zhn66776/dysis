@@ -12,6 +12,6 @@ let package = Package(
         .target(name: "AgentDeskCore"),
         .executableTarget(name: "AgentDesk", dependencies: ["AgentDeskCore"]),
         .executableTarget(name: "AgentDeskFiles", dependencies: ["AgentDeskCore"]),
-        .testTarget(name: "AgentDeskCoreTests", dependencies: ["AgentDeskCore"])
+        .testTarget(name: "AgentDeskCoreTests", dependencies: ["AgentDeskCore"], resources: [.copy("Fixtures")])
     ]
 )

@@ -22,6 +22,8 @@ public struct CanvasNode: Identifiable, Codable, Equatable, Sendable {
     public var source: CanvasSource?
     /// The node's own git worktree in a trusted git project (HARNESS.md H2).
     public var worktree: NodeWorktree?
+    /// What the node's branch changed since it was cut, as of its last turn.
+    public var changes: DiffStat?
     public init(id: UUID = UUID(), sessionID: UUID, position: CanvasPoint, merge: CanvasMergeTemplate? = nil) {
         self.id = id; self.sessionID = sessionID; self.position = position; self.merge = merge
     }

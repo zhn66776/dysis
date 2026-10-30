@@ -161,6 +161,44 @@ public final class CodexBackend: AgentBackend, @unchecked Sendable {
         throw AgentError.processFailure("Codex 在完成连接检查前退出。")
     }
 
+    /// `thread/revert { beforeTurnId }` (HARNESS.md H3 undo): the thread's
+    /// history drops that turn and every later one. Loads the thread with
+    /// `thread/resume` first; starts no model turn and touches no files.
+    public static func revert(executableURL: URL = CodexBackend.defaultExecutableURL, directory: URL, threadID: String, beforeTurnID: String) async throws {
+        guard executableURL.isFileURL, FileManager.default.isExecutableFile(atPath: executableURL.path) else {
+            throw AgentError.unavailable("找不到可执行的 Codex：\(executableURL.path)")
+        }
+        let disabledMCPNames = try await discoverConfiguredMCPNames(executableURL: executableURL, directory: directory)
+        try ensureMCPNamesCanBeDisabled(disabledMCPNames)
+        let process = CLIProcess(executable: executableURL, arguments: try appServerArguments(disabling: disabledMCPNames),
+                                 directory: directory, environment: RuntimeEnvironment.subscriptionOnly())
+        try process.start()
+        defer { process.terminate() }
+        for line in revertRequests(threadID: threadID, beforeTurnID: beforeTurnID, cwd: directory.path).prefix(1) { try process.writeJSON(line) }
+        var step = 1
+        for await event in process.events {
+            try Task.checkCancellation()
+            guard case .stdoutLine(let line) = event, let object = parseObject(line) else {
+                if case .exited(let code) = event { throw AgentError.processFailure("Codex 在撤销完成前退出（状态码 \(code)）。") }
+                continue
+            }
+            if let error = object["error"] as? [String: Any] { throw AgentError.protocolFailure("Codex 撤销失败：\(redactedMessage(error))") }
+            guard let id = object["id"], rpcID(id) == String(step), object["result"] != nil else { continue }
+            if step == 3 { return }
+            if step == 1 { try process.writeJSON(["method": "initialized", "params": [:]]) }
+            try process.writeJSON(revertRequests(threadID: threadID, beforeTurnID: beforeTurnID, cwd: directory.path)[step])
+            step += 1
+        }
+        throw AgentError.processFailure("Codex 在撤销完成前退出。")
+    }
+
+    /// initialize → thread/resume → thread/revert, with ids 1…3.
+    static func revertRequests(threadID: String, beforeTurnID: String, cwd: String) -> [[String: Any]] {
+        [["method": "initialize", "id": 1, "params": ["clientInfo": ["name": "agentdesk", "title": "AgentDesk", "version": "0.1.0"], "capabilities": ["experimentalApi": false]]],
+         ["method": "thread/resume", "id": 2, "params": ["threadId": threadID, "cwd": cwd]],
+         ["method": "thread/revert", "id": 3, "params": ["threadId": threadID, "beforeTurnId": beforeTurnID]]]
+    }
+
     private enum InspectionStep { case initialize, account, models, rateLimits }
 
     /// `rateLimits` snapshot → windows. `usedPercent` is already 0–100.
@@ -574,16 +612,18 @@ public final class CodexBackend: AgentBackend, @unchecked Sendable {
             }
         case "account/rateLimits/updated":
             if let quota = Self.quota(fromRateLimits: params["rateLimits"]) { continuation.yield(.quota(quota)) }
-        case "item/started":
-            if let item = params["item"] as? [String: Any], item["type"] as? String == "mcpToolCall",
-               let server = item["server"] as? String, let tool = item["tool"] as? String {
-                continuation.yield(.status("正在调用 MCP 工具 \(server) · \(tool)…"))
-            } else if let item = params["item"] as? [String: Any], item["type"] as? String == "commandExecution" {
-                continuation.yield(.status("正在运行命令 \(String((item["command"] as? String ?? "").prefix(80)))…"))
-            } else if let item = params["item"] as? [String: Any], item["type"] as? String == "fileChange" {
-                continuation.yield(.status("正在修改文件…"))
+        case "item/started", "item/completed", "item/commandExecution/outputDelta", "item/fileChange/outputDelta", "turn/diff/updated":
+            for event in CodexStepParser.events(method: method, params: params) {
+                continuation.yield(event)
+                guard method == "item/started", case .step(let step) = event else { continue }
+                switch step.kind {
+                case .mcp?: continuation.yield(.status("正在调用 MCP 工具 \(step.title ?? "")…"))
+                case .fileChange?: continuation.yield(.status("正在修改文件…"))
+                case .web?: continuation.yield(.status("正在搜索网页…"))
+                default: continuation.yield(.status("正在运行命令 \(String((step.title ?? "").prefix(80)))…"))
+                }
             }
-        case "item/completed", "turn/started", "thread/status/changed":
+        case "turn/started", "thread/status/changed":
             break
         default:
             // Ignore forward-compatible notifications. Unknown data is never rendered as model text.

@@ -12,6 +12,14 @@ export interface BoardProject {
   git?: boolean
 }
 
+/** Files changed and lines added/removed. */
+export interface DiffStat { files: number; added: number; removed: number }
+
+export type StepKind = 'command' | 'fileChange' | 'mcp' | 'read' | 'search' | 'web' | 'other'
+export type StepState = 'running' | 'done' | 'failed' | 'declined'
+/** One tool step of a reply (HARNESS.md H3); output keeps its first and last 4 KB. */
+export interface StepPayload { id: string; kind: StepKind; title: string; detail?: string; state: StepState; output?: string; exitCode?: number; diff?: string }
+
 /** A node's own git worktree (HARNESS.md H2). */
 export interface WorktreePayload {
   branch: string
@@ -38,6 +46,8 @@ export interface NodePayload {
   /** Files and MCP result nodes: read-only material, only ever a data-edge source. */
   source?: SourcePayload
   worktree?: WorktreePayload
+  /** What the node's branch changed since it was cut. */
+  changes?: DiffStat
 }
 
 export type FileKind = 'image' | 'pdf' | 'document' | 'text'
@@ -120,6 +130,11 @@ export interface MessagePayload {
   actualModels?: string[]
   attachments?: string[]
   contextSources?: string[]
+  steps?: StepPayload[]
+  /** What this turn changed; the full diff comes with `turn.diff`. */
+  diffStat?: DiffStat
+  /** A checkpoint was taken before this turn, so it can be undone. */
+  undoable?: boolean
 }
 
 export interface SessionDetail { id: string; messages: MessagePayload[] }
@@ -160,7 +175,8 @@ export interface Region { x: number; y: number; w: number; h: number }
 export interface SearchHit { nodeID: string; messageID?: string; excerpt: string }
 export interface SearchResults { type: 'search.results'; id: string; boardID: string; query: string; hits: SearchHit[] }
 export interface ContextPreview { type: 'context.preview'; id: string; nodeID: string; text: string; notes: string[] }
-export type Incoming = StatePayload | ComposerInsert | ConfirmShow | ChromeInsets | SearchResults | ContextPreview
+export interface TurnDiff { type: 'turn.diff'; id: string; sessionID: string; messageID: string; diff: string }
+export type Incoming = StatePayload | ComposerInsert | ConfirmShow | ChromeInsets | SearchResults | ContextPreview | TurnDiff
 
 export type Command =
   | { type: 'ready' }
@@ -207,6 +223,8 @@ export type Command =
   | { type: 'edge.setDiff'; boardID: string; edgeID: string; ok: boolean }
   | { type: 'board.gitInit'; boardID: string }
   | { type: 'notice.dismiss' }
+  | { type: 'turn.diff'; id: string; sessionID: string; messageID: string }
+  | { type: 'turn.undo'; boardID: string; nodeID: string; messageID: string }
   | { type: 'chrome.regions'; drag: Region[]; noDrag: Region[] }
   | { type: 'source.createFiles'; boardID: string; x: number; y: number }
   | { type: 'source.addFiles'; boardID: string; nodeID: string }

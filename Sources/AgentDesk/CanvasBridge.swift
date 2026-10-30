@@ -36,6 +36,8 @@ struct BridgeNode: Encodable, Equatable {
     let source: BridgeSource?
     /// The node's own git worktree (HARNESS.md H2).
     let worktree: BridgeWorktree?
+    /// What its branch changed since the cut point ("改了 N 个文件 +a −b").
+    let changes: DiffStat?
 }
 
 struct BridgeWorktree: Encodable, Equatable {
@@ -107,6 +109,17 @@ struct BridgeDraft: Encodable, Equatable {
 struct BridgeMessage: Encodable, Equatable {
     let id: UUID, role: MessageRole, text: String, state: MessageState, createdAt: Double
     let actualModels: [String]?, attachments: [String]?, contextSources: [String]?
+    /// Tool steps (HARNESS.md H3), the turn's diff stat, and whether it has a checkpoint to undo to.
+    let steps: [BridgeStep]?, diffStat: DiffStat?, undoable: Bool?
+}
+
+struct BridgeStep: Encodable, Equatable {
+    let id: String, kind: StepEvent.Kind, title: String, detail: String?, state: StepEvent.State
+    let output: String?, exitCode: Int?, diff: String?
+    init(_ s: MessageStep) {
+        id = s.id; kind = s.kind; title = s.title; detail = s.detail; state = s.state
+        output = s.displayOutput; exitCode = s.exitCode; diff = s.diff
+    }
 }
 
 struct BridgeDetail: Encodable, Equatable { let id: UUID; let messages: [BridgeMessage] }
@@ -203,7 +216,9 @@ enum BridgeEncoding {
 
     static func message(_ m: ChatMessage) -> BridgeMessage {
         BridgeMessage(id: m.id, role: m.role, text: m.text, state: m.state, createdAt: m.createdAt.timeIntervalSince1970 * 1000,
-                      actualModels: m.actualModelIDs, attachments: m.attachments?.map(\.displayName), contextSources: m.contextSources)
+                      actualModels: m.actualModelIDs, attachments: m.attachments?.map(\.displayName), contextSources: m.contextSources,
+                      steps: m.steps.map { $0.map(BridgeStep.init) }, diffStat: m.diffStat,
+                      undoable: m.role == .assistant && m.checkpoint != nil && m.state != .streaming ? true : nil)
     }
 
     static func board(_ b: CanvasBoard, sessions: [UUID: ChatSession], running: Set<UUID>, history: CanvasHistoryStatus, importing: Set<UUID> = []) -> BridgeBoard {
@@ -225,7 +240,7 @@ enum BridgeEncoding {
                               // Offer a re-run only when a direct downstream node is behind this one.
                               downstream: b.edges.contains { $0.kind == .data && $0.source == n.id && stale.contains($0.target) } ? b.downstreamOrder(from: n.id, include: ran).count : 0,
                               source: n.source.map { BridgeSource($0, importing: importing.contains(n.id)) },
-                              worktree: n.worktree.map(BridgeWorktree.init))
+                              worktree: n.worktree.map(BridgeWorktree.init), changes: n.changes)
         }
         let pending = b.nodes.reduce(into: Set<UUID>()) { $0.formUnion(CanvasContextBuilder.pendingEdges(board: b, nodeID: $1.id, sessions: sessions)) }
         let edges = b.edges.map { BridgeEdge(id: $0.id, kind: $0.kind, source: $0.source, target: $0.target, pending: $0.kind == .data ? pending.contains($0.id) : nil, sourceMessageID: $0.sourceMessageID, includeDiff: $0.includeDiff) }
@@ -556,6 +571,25 @@ final class CanvasBridge: NSObject, ObservableObject, WKScriptMessageHandler {
             confirm(title: "在「\(project.name)」初始化 git？", detail: "运行 git init，并把文件夹里现有的文件做一次初始提交。之后新建的节点各有自己的 worktree 和分支，可以并行改代码。", action: "初始化 git") { [canvas] _ in
                 Task { await canvas.initializeGit(b) }
             }
+        case "turn.diff":
+            // The page asks for one turn's full diff when its changes view opens.
+            guard let id = c.id, let sessionID = c.sessionID, let messageID = c.messageID else { return }
+            let diff = app.diffStore.load(session: sessionID, message: messageID) ?? ""
+            evaluate(["type": "turn.diff", "id": id.uuidString, "sessionID": sessionID.uuidString, "messageID": messageID.uuidString, "diff": diff])
+            return
+        case "turn.undo":
+            guard let b = c.boardID, let n = c.nodeID, let m = c.messageID,
+                  let plan = canvas.undoPlan(boardID: b, nodeID: n, messageID: m) else { return }
+            switch plan {
+            case .inPlace:
+                confirm(title: "撤销这一回合？", detail: "worktree 里的文件回到这一回合开始前的检查点，这一回合之后新建的文件会删除（被 .gitignore 忽略的文件保留）。Codex 会话通过 thread/revert 删掉这一回合及之后的回合，本地记录同步删除。已经提交到分支的提交不会改写。",
+                        action: "撤销这一回合") { [canvas] _ in canvas.undoTurn(boardID: b, nodeID: n, messageID: m) }
+            case .branch(let previous):
+                let provider = app.sessions.first { s in canvas.library.boards.first { $0.id == b }?.node(n)?.sessionID == s.id }?.provider.runtimeName ?? "这个 CLI"
+                let inherit = previous == nil ? "新节点不继承对话。" : "新节点继承到上一条回复为止的对话（Claude 只能从最新一轮原生分叉，所以多半会用回放继承，只带文字）。"
+                confirm(title: "从检查点新建分支？", detail: "\(provider) 不能从会话里删除某一回合，所以不在原节点上撤销：新建一个分支节点，它的 worktree 从这一回合开始前的检查点切出，原节点和它的文件保持不变。\(inherit)",
+                        action: "从检查点分支") { [canvas] _ in canvas.undoTurn(boardID: b, nodeID: n, messageID: m) }
+            }
         case "chat.send":
             guard let b = c.boardID, let n = c.nodeID, let text = c.text else { return }
             canvas.send(boardID: b, nodeID: n, text: text)
@@ -713,7 +747,8 @@ final class CanvasBridge: NSObject, ObservableObject, WKScriptMessageHandler {
     /// anything else changed.
     static func appendOnly(old: [BridgeMessage], new: [BridgeMessage]) -> String? {
         guard old.count == new.count, let o = old.last, let n = new.last, old.dropLast() == new.dropLast(),
-              o.id == n.id, o.state == n.state, o.actualModels == n.actualModels, n.text.hasPrefix(o.text) else { return nil }
+              o.id == n.id, o.state == n.state, o.actualModels == n.actualModels, o.steps == n.steps, o.diffStat == n.diffStat,
+              n.text.hasPrefix(o.text) else { return nil }
         return String(n.text.dropFirst(o.text.count))
     }
 

@@ -2,13 +2,16 @@ import { memo } from 'react'
 import { Handle, Position, type Node, type NodeProps } from '@xyflow/react'
 import { Reply } from './Reply'
 import { ProviderMark } from './providers'
-import type { SessionSummary, MessagePayload } from './types'
+import { diffLabel } from './steps'
+import type { DiffStat, SessionSummary, MessagePayload } from './types'
 
 export type ChatNodeData = {
   summary?: SessionSummary; inherited: boolean; nativeFork?: boolean
   merge?: string; stale?: boolean; downstream?: number; chainCurrent?: boolean; picked?: boolean
   /** The node's worktree branch, shown in the footer. */
   branch?: string
+  /** What the branch changed: "改了 N 个文件 +a −b". */
+  changes?: DiffStat
   expanded?: boolean; reading?: MessagePayload
   onExpand?(): void; onFollowUp?(): void; onBranch?(): void; onQuote?(): void
   onDownstream?(): void
@@ -54,6 +57,7 @@ function ChatNodeView({ data, selected }: NodeProps<ChatFlowNode>) {
           ? <span className="status status-stale" title="上游有新的输出，这个回答可能已经过期">● 上游已更新</span>
           : <span className={`status status-${s.state}`}>{s.state === 'running' && s.status ? s.status : stateLabel[s.state]}</span>}
       </div>
+      {data.changes && <div className="node-changes" title="这个节点的分支相对切出点的改动">{diffLabel(data.changes)}</div>}
       {(data.downstream ?? 0) > 0 && s.state !== 'running' && (
         <button className="downstream-pill nodrag" title={`让下游 ${data.downstream} 个已运行的节点带上新输出重新回答（${data.downstream} 次调用，运行前会确认）`} onClick={e => { e.stopPropagation(); data.onDownstream?.() }}>
           ▶ 重跑下游 {data.downstream}

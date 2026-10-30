@@ -32,6 +32,12 @@ public struct ChatMessage: Identifiable, Codable, Equatable, Sendable {
     public var contextSources: [String]?
     /// The provider's own turn ID for this reply (Codex), used as a fork point.
     public var providerTurnID: String?
+    /// Tool steps of this reply (HARNESS.md H3).
+    public var steps: [MessageStep]?
+    /// What this turn changed in the working directory; the full diff is in `TurnDiffStore`.
+    public var diffStat: DiffStat?
+    /// Commit of the worktree before this turn (`refs/agentdesk/checkpoints/<message>`), for undo.
+    public var checkpoint: String?
     public init(id: UUID = UUID(), role: MessageRole, text: String, state: MessageState = .complete, createdAt: Date = Date(), attachments: [ChatAttachment]? = nil, contextSources: [String]? = nil) {
         self.id = id; self.role = role; self.text = text; self.state = state; self.createdAt = createdAt
         self.attachments = attachments; self.contextSources = contextSources
@@ -171,6 +177,10 @@ public enum AgentEvent: Sendable, Equatable {
     case turnID(String)
     case contextUsage(ContextUsage)
     case quota(ProviderQuota)
+    /// A tool step started, streamed output or finished (HARNESS.md H3).
+    case step(StepEvent)
+    /// The turn's cumulative diff so far, when the provider reports it (Codex).
+    case turnDiff(String)
     case completed
 }
 

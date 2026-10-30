@@ -373,6 +373,26 @@ public enum ProjectGit {
         return (try? changedFiles(worktree))?.isEmpty ?? false
     }
 
+    // MARK: Checkpoints (H3)
+
+    public static func checkpointRef(message: UUID) -> String { "refs/agentdesk/checkpoints/\(message.uuidString.lowercased())" }
+
+    /// The worktree as it is before a writing turn, kept under
+    /// `refs/agentdesk/checkpoints/<reply>` (its HEAD when clean).
+    public static func checkpoint(_ worktree: NodeWorktree, message: UUID) throws -> String {
+        try snapshot(worktree, ref: checkpointRef(message: message), message: "AgentDesk 检查点：回合开始前")
+    }
+
+    /// "撤销这一回合": the worktree's files go back to `commit`. Files made
+    /// since are removed (ignored ones and `.cursor/` stay); the branch and
+    /// its commits are not rewritten, so the undo shows as uncommitted changes.
+    public static func restore(_ worktree: NodeWorktree, to commit: String) throws {
+        let top = URL(fileURLWithPath: worktree.path, isDirectory: true)
+        try Git.run(["read-tree", "-u", "--reset", commit], in: top)
+        try Git.run(["clean", "-fdq", "-e", ".cursor"], in: top)
+        try Git.run(["reset", "-q"], in: top)
+    }
+
     // MARK: Diffs
 
     /// Everything the node changed since it was cut, committed or not.

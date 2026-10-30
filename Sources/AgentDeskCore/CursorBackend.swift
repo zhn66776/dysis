@@ -79,6 +79,7 @@ public struct CursorBackend: AgentBackend, Sendable {
                                 if !final.isEmpty, final != accumulated { continuation.yield(.replaceText(final)) }
                             }
                             if let status = parsed.status, !status.isEmpty { continuation.yield(.status(status)) }
+                            if let step = CursorStepParser.step(object) { continuation.yield(.step(step)) }
                             if parsed.isFailure { throw AgentError.protocolFailure(SafeText.redact(parsed.failureMessage ?? "Cursor CLI 返回失败结果。")) }
                             if request.projectAccess {
                                 if parsed.isToolCallStart, let status = parsed.projectStatus { continuation.yield(.status(status)) }

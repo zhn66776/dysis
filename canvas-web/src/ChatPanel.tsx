@@ -4,6 +4,8 @@ import { ContextInspector } from './ContextInspector'
 import { send } from './bridge'
 import { ContextMeter, Dropdown, EffortPicker, ModelPicker, QuotaMeter } from './Controls'
 import { ProviderMark } from './providers'
+import { StepList, TurnChanges } from './StepList'
+import { diffLabel } from './steps'
 import { composerHint, dataInputs, formatBytes, imageNotes, kindLabel } from './sources'
 import type { AppState, MessagePayload, NodePayload } from './types'
 
@@ -25,6 +27,7 @@ export function ChatPanel({ state, node, draft, onDraft, onClose, composerFocus,
   const [renaming, setRenaming] = useState(false)
   const [showInherited, setShowInherited] = useState(false)
   const [contextOpen, setContextOpen] = useState(false)
+  const [changesOf, setChangesOf] = useState<MessagePayload | null>(null)
   const composer = useRef<HTMLTextAreaElement>(null)
   const list = useRef<HTMLDivElement>(null)
   const stick = useRef(true)
@@ -176,12 +179,15 @@ export function ChatPanel({ state, node, draft, onDraft, onClose, composerFocus,
           <Message key={m.id} m={m} highlighted={messageFocus?.messageID === m.id}
             onFollowUp={() => composer.current?.focus()}
             onQuote={() => send({ type: 'node.quote', boardID: board.id, nodeID: node.id, messageID: m.id })}
-            onBranch={() => send({ type: 'node.branch', boardID: board.id, nodeID: node.id, messageID: m.id })} />
+            onBranch={() => send({ type: 'node.branch', boardID: board.id, nodeID: node.id, messageID: m.id })}
+            onChanges={() => setChangesOf(m)}
+            onUndo={running ? undefined : () => send({ type: 'turn.undo', boardID: board.id, nodeID: node.id, messageID: m.id })} />
         ))}
         {running && summary.status && <div className="status-line">{summary.status}</div>}
       </div>
 
       <div className="context-launch"><span className="sub">{upstream.length ? `${upstream.length} 个引用来源` : node.inherited ? '分支继承上下文' : '当前会话上下文'}</span><button className="act" onClick={() => setContextOpen(true)}>预览本轮输入</button></div>
+      {changesOf?.diffStat && <TurnChanges sessionID={node.sessionID} messageID={changesOf.id} stat={changesOf.diffStat} onClose={() => setChangesOf(null)} />}
       {contextOpen && <ContextInspector boardID={board.id} nodeID={node.id} draft={draft} onClose={() => setContextOpen(false)} />}
       <div className="composer">
         {(hasFiles || importing) && (
@@ -241,7 +247,7 @@ function inheritNote(node: NodePayload, messages?: MessagePayload[]) {
   return first ? '已在第一次发送时通过回放继承带上父节点的文字记录。' : '已继承。'
 }
 
-function Message({ m, readOnly, onBranch, onQuote, onFollowUp, highlighted }: { m: MessagePayload; readOnly?: boolean; highlighted?: boolean; onBranch?(): void; onQuote?(): void; onFollowUp?(): void }) {
+function Message({ m, readOnly, onBranch, onQuote, onFollowUp, onChanges, onUndo, highlighted }: { m: MessagePayload; readOnly?: boolean; highlighted?: boolean; onBranch?(): void; onQuote?(): void; onFollowUp?(): void; onChanges?(): void; onUndo?(): void }) {
   if (m.role === 'user') {
     return (
       <div data-message-id={m.id} className={`msg-user${highlighted ? ' search-highlight' : ''}`}>
@@ -257,10 +263,17 @@ function Message({ m, readOnly, onBranch, onQuote, onFollowUp, highlighted }: { 
   }
   return (
     <div data-message-id={m.id} className={`msg-assistant state-${m.state}${highlighted ? ' search-highlight' : ''}`}>
+      {m.steps && m.steps.length > 0 && <StepList steps={m.steps} streaming={m.state === 'streaming'} />}
       <Reply text={m.text} />
       {m.state === 'streaming' && <span className="caret" />}
       {m.state === 'failed' && <div className="msg-note danger">回复失败</div>}
       {m.state === 'cancelled' && <div className="msg-note">已停止</div>}
+      {!readOnly && m.state !== 'streaming' && (m.diffStat || m.undoable) && (
+        <div className="msg-actions turn-actions">
+          {m.diffStat && <button className="act" title="按文件查看这一回合对 worktree 的改动" onClick={onChanges}>本回合改动 · {diffLabel(m.diffStat)}</button>}
+          {m.undoable && onUndo && <button className="act" title="把 worktree 恢复到这一回合开始前的检查点" onClick={onUndo}>撤销这一回合</button>}
+        </div>
+      )}
       {!readOnly && m.state === 'complete' && (
         <div className="msg-actions">
           <button className="act" onClick={onFollowUp}>追问</button>

@@ -1,6 +1,6 @@
 # AgentDesk Harness 改造方案 · v1
 
-> 整理日期：2026-10-30　｜　状态：H2 已实施（分支 `claude/harness-worktrees-d88367`），其余为方案
+> 整理日期：2026-10-30　｜　状态：H2、H3 已实施（分支 `claude/harness-worktrees-d88367`），其余为方案
 > 依据的版本：Claude Code 2.1.308，codex-cli 0.165.0-alpha.1.2（ChatGPT.app 内置），AgentDesk main `b21c4ae`。
 > 本文只讨论“画布节点背后怎么跑 agent”。画布交互见 `CANVAS.md`。
 
@@ -173,6 +173,15 @@
 - 离线测试：三家事件解析器的样例（录制好的 JSONL），以及检查点和撤销。
 - 实际调用：每家 1 回合，改一个文件，看到 diff 后撤销。
 
+**实施状态（2026-10-30，H3 已完成，离线验证）**：
+- 代码：`Sources/AgentDeskCore/Steps.swift`（`StepEvent`、`MessageStep`、`CodexStepParser`、`ClaudeStepParser`、`CursorStepParser`、`TurnDiffStore`），`ProjectGit.checkpoint/restore`，`CodexBackend.revert`，面板的步骤列表、“本回合改动”、“撤销这一回合”，节点卡片的改动统计。
+- `StepEvent` 的 kind、title、state 改成可选：只带结果或输出增量的事件不覆盖已有字段；另加 `fullOutput`（一次性给出的完整输出，替换流式输出）。
+- 本回合 diff 一律由 AgentDesk 在回合结束时对 worktree 和检查点做 `git diff`（三家一致）；Codex 的 `turn/diff/updated` 只在没有检查点时（例如没有 worktree 的旧节点）作为备用。
+- 检查点和快照一样用临时索引生成，包含未跟踪文件（方案原写 `git stash create`，它不含未跟踪文件）。撤销用 `read-tree -u --reset` + `clean` + `reset`，不改写分支。
+- Claude、Cursor 的撤销：不在原节点上改，新建分支节点，worktree 从检查点切出，继承到上一条回复（Claude 只能从最新一轮原生分叉，所以多半是回放继承）。
+- 离线测试：`StepEventTests`（11 个）。样例 JSONL 在 `Tests/AgentDeskCoreTests/Fixtures/`，是按 Codex schema 和 Claude/Cursor 现有格式手写的，不是实录；实际调用时应换成实录。
+- 待实际验证：三家的真实事件形状（尤其 Cursor 的 `rejected` 和 `exitCode`、Claude 的 `Exit code N` 和拒绝文字），以及 `thread/revert` 是否需要先 `thread/resume`。
+
 ### H4 · 统一规则
 
 **三层规则**，越往下优先级越高：
@@ -227,7 +236,7 @@
 | Codex 按需审批的取值 | `approvalPolicy` 的具体取值和沙箱的配合，各版本可能不同 | 读当前 schema，离线启动 app-server 的 `thread/start`（不发消息） |
 | Claude `--permission-prompt-tool` 与 `--permission-prompts host` 的组合 | print 模式下的行为、超时、拒绝后模型是否继续 | 1 回合实际调用 |
 | Cursor 审批 | `--print` 是否有审批回调；它是否读 `AGENTS.md` | 查文档和 `--help`，再用 1 回合实际调用 |
-| worktree 与原生分叉 | 分叉的子会话换了工作目录后，官方 CLI 是否接受 | 两家各 1 回合 |
+| worktree 与原生分叉 | 分叉的子会话换了工作目录后，官方 CLI 是否接受。Claude Code 按工作目录存会话，`--resume <id> --fork-session` 在另一个 worktree 里可能找不到父会话；失败时现有回退会把这条继承线改成回放 | 两家各 1 回合 |
 | 磁盘和性能 | 大仓库每个节点一个 worktree | 先只在“询问 / 自动”档的写入节点创建，只读节点直接用项目目录 |
 | 记忆引用展开 | Codex 和 Cursor 是否展开 `@file` | 各 1 回合 |
 

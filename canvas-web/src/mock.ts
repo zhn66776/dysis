@@ -8,6 +8,9 @@ interface MockSession { id: string; title: string; provider: Provider; modelID: 
 
 const models: Record<Provider, string> = { claude: 'sonnet', codex: 'gpt-6.1-sol', grok: 'grok-4.7-medium', gemini: 'gemini-4-argon-medium' }
 const uid = () => crypto.randomUUID()
+const mockDiff = ['diff --git a/docs/pricing.md b/docs/pricing.md', 'new file mode 100644', '--- /dev/null', '+++ b/docs/pricing.md', '@@ -0,0 +1,8 @@',
+  '+# 定价', '+', '+- 订阅制：月付 49 元，年付八折', '+- 按量：每次任务 0.5 元', '+- 混合：基础订阅加超额按量', '+', '+（浏览器预览的示例）', '+',
+  'diff --git a/README.md b/README.md', '--- a/README.md', '+++ b/README.md', '@@ -1,2 +1,2 @@', ' # 示例项目', '-定价待定', '+定价见 docs/pricing.md'].join('\n')
 
 export function createMockHost(emit: (p: Incoming) => void) {
   const sessions = new Map<string, MockSession>()
@@ -44,12 +47,22 @@ export function createMockHost(emit: (p: Incoming) => void) {
   const msg = (role: MessagePayload['role'], text: string): MessagePayload => ({ id: uid(), role, text, state: 'complete', createdAt: Date.now() })
 
   const a = addSession('claude', '定价调研', [msg('user', 'Q4 新产品怎么定价？给我三个方向'), msg('assistant', '1. **订阅制**：月付，年付打八折。\n2. **按量计费**：按任务次数阶梯计价。\n3. **混合**：基础订阅加超额按量。\n\n（浏览器预览的示例内容）')])
-  const b = addSession('codex', '写定价说明')
+  const b = addSession('codex', '写定价说明', [msg('user', '把定价说明写进 docs/pricing.md，并跑一下检查'), {
+    ...msg('assistant', '已写好 `docs/pricing.md`，检查脚本通过。（浏览器预览的示例内容）'),
+    steps: [
+      { id: 's1', kind: 'read', title: 'sed -n 1,80p README.md', state: 'done', exitCode: 0, output: '# 示例项目\n…' },
+      { id: 's2', kind: 'fileChange', title: 'docs/pricing.md', state: 'done', diff: '--- add docs/pricing.md\n+# 定价\n+订阅制：月付 49 元' },
+      { id: 's3', kind: 'command', title: 'npm run lint', state: 'failed', exitCode: 1, output: 'docs/pricing.md: 1 warning' },
+      { id: 's4', kind: 'command', title: 'npm run lint -- --fix', state: 'done', exitCode: 0, output: 'ok' },
+    ],
+    diffStat: { files: 2, added: 9, removed: 1 }, undoable: true,
+  }])
   const c = addSession('grok', 'Grok 竞品速览')
   const board: BoardPayload = { id: uid(), title: '示例画布', nodes: [], edges: [] }
   const na: NodePayload = { id: uid(), sessionID: a.id, x: 80, y: 120, stale: false, downstream: 0 }
   const nb: NodePayload = { id: uid(), sessionID: b.id, x: 440, y: 120, stale: false, downstream: 0,
-    worktree: { branch: 'agentdesk/1a2b3c4d/5e6f7a8b', base: 'main', path: '~/AgentDesk Worktrees/示例项目/5e6f7a8b', missing: false } }
+    worktree: { branch: 'agentdesk/1a2b3c4d/5e6f7a8b', base: 'main', path: '~/AgentDesk Worktrees/示例项目/5e6f7a8b', missing: false },
+    changes: { files: 2, added: 9, removed: 1 } }
   const nc: NodePayload = { id: uid(), sessionID: c.id, x: 440, y: 340, stale: false, downstream: 0 }
   board.nodes.push(na, nb, nc)
   board.edges.push({ id: uid(), kind: 'data', source: na.id, target: nb.id, pending: true })
@@ -106,6 +119,8 @@ export function createMockHost(emit: (p: Incoming) => void) {
       case 'ready': case 'error.dismiss': case 'notice.dismiss': break
       case 'node.mergeToBase': case 'node.combine': case 'node.revealWorktree': case 'board.gitInit':
         window.alert('浏览器预览：git 操作只在应用里运行。'); return
+      case 'turn.diff': emit({ type: 'turn.diff', id: c.id, sessionID: c.sessionID, messageID: c.messageID, diff: mockDiff }); return
+      case 'turn.undo': confirm('撤销这一回合？', '浏览器预览：应用里会把 worktree 恢复到这一回合开始前的检查点。', '撤销这一回合', () => {}); return
       case 'edge.setDiff': { const e = boardNow().edges.find(x => x.id === c.edgeID); if (e) e.includeDiff = c.ok || undefined; break }
       case 'board.create': { const nb: BoardPayload = { id: uid(), title: '新画布', nodes: [], edges: [] }; boards.push(nb); current = nb.id; break }
       case 'board.select': current = c.boardID; break

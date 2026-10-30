@@ -35,6 +35,8 @@ final class CanvasModel: ObservableObject {
     @Published private(set) var gitBusy: Set<UUID> = []
     /// Project folder → whether it is in a git work tree; read again when a board is selected.
     private var gitFolders: [String: Bool] = [:]
+    /// Writing turns with a checkpoint: session → where, which reply, which commit (H3).
+    private var checkpointedTurns: [UUID: (board: UUID, node: UUID, message: UUID, checkpoint: String)] = [:]
 
     init(app: AppModel, worktreeRoot: URL = NodeWorktree.defaultRoot) {
         self.app = app
@@ -68,6 +70,7 @@ final class CanvasModel: ObservableObject {
             .receive(on: DispatchQueue.main)
             .sink { [weak self] running in
                 self?.settleForks(running: running)
+                self?.settleTurns(running: running)
                 self?.writingSessions.formIntersection(running)
             }
     }
@@ -81,6 +84,29 @@ final class CanvasModel: ObservableObject {
             update(pending.board) { board in
                 if let i = board.edges.firstIndex(where: { $0.id == pending.edge }) { board.edges[i].nativeForkFailed = true }
             }
+        }
+    }
+
+    /// A finished writing turn gets AgentDesk's own diff (worktree against
+    /// its checkpoint), for every provider; the node's branch total follows.
+    private func settleTurns(running: Set<UUID>) {
+        for (sessionID, turn) in checkpointedTurns where !running.contains(sessionID) {
+            checkpointedTurns[sessionID] = nil
+            guard let worktree = board(turn.board)?.node(turn.node)?.worktree else { continue }
+            Task {
+                guard let diff = try? await git({ try ProjectGit.diff(worktree, since: turn.checkpoint) }) else { return }
+                app.setTurnDiff(sessionID: sessionID, messageID: turn.message, diff: diff)
+                await refreshChanges(boardID: turn.board, nodeID: turn.node)
+            }
+        }
+    }
+
+    /// "改了 N 个文件 +a −b" on the node card: its branch since the cut point.
+    func refreshChanges(boardID: UUID, nodeID: UUID) async {
+        guard let worktree = board(boardID)?.node(nodeID)?.worktree, worktree.exists else { return }
+        let stat = try? await git { try ProjectGit.diffStat(worktree) }
+        update(boardID) { board in
+            if let i = board.nodes.firstIndex(where: { $0.id == nodeID }) { board.nodes[i].changes = stat.flatMap { $0.isEmpty ? nil : $0 } }
         }
     }
 
@@ -344,8 +370,7 @@ final class CanvasModel: ObservableObject {
     /// worktree as it is now (`refs/agentdesk/snapshots/<parent>/<child>`);
     /// the parent's branch and files are not touched.
     func branch(boardID: UUID, nodeID: UUID, messageID: UUID) {
-        guard let board = library.boards.first(where: { $0.id == boardID }), let parent = board.node(nodeID),
-              let parentSession = sessionsByID[parent.sessionID],
+        guard let parent = board(boardID)?.node(nodeID), let parentSession = sessionsByID[parent.sessionID],
               parentSession.messages.contains(where: { $0.id == messageID }) else { return }
         let childID = UUID()
         let start: (@Sendable () throws -> String)? = parent.worktree.map { worktree in {
@@ -353,18 +378,75 @@ final class CanvasModel: ObservableObject {
             return try ProjectGit.snapshot(worktree, ref: "refs/agentdesk/snapshots/\(NodeWorktree.shortID(nodeID))/\(NodeWorktree.shortID(childID))",
                                            message: "AgentDesk：分支快照")
         } }
+        placeBranch(boardID: boardID, parentID: nodeID, childID: childID, inheritThrough: messageID, title: "分支 · \(parentSession.title)", start: start)
+    }
+
+    /// A child of the parent node: same provider and settings, an inherit
+    /// edge through `inheritThrough` (none when nil), and a worktree cut from
+    /// `start()` when the board uses worktrees.
+    private func placeBranch(boardID: UUID, parentID: UUID, childID: UUID, inheritThrough messageID: UUID?, title: String, start: (@Sendable () throws -> String)?) {
+        guard let parentSession = board(boardID)?.node(parentID).flatMap({ sessionsByID[$0.sessionID] }) else { return }
         withWorktree(boardID: boardID, nodeID: childID, start: start) { [weak self] worktree in
-            guard let self, let board = self.board(boardID), let parent = board.node(nodeID),
+            guard let self, let board = self.board(boardID), let parent = board.node(parentID),
                   let sessionID = self.newSession(on: boardID, provider: parentSession.provider, copying: parentSession, worktree: worktree) else { return false }
-            self.app.renameSession(sessionID, title: "分支 · \(parentSession.title)")
+            self.app.renameSession(sessionID, title: title)
             var node = CanvasNode(id: childID, sessionID: sessionID, position: board.freePosition(near: CanvasPoint(x: parent.position.x + 440, y: parent.position.y)))
             node.worktree = worktree
             self.update(boardID) { board in
                 board.nodes.append(node)
-                _ = try? board.connect(source: nodeID, target: node.id, kind: .inherit, sourceMessageID: messageID)
+                if let messageID { _ = try? board.connect(source: parentID, target: node.id, kind: .inherit, sourceMessageID: messageID) }
             }
             self.focusNodeID = node.id
             return true
+        }
+    }
+
+    // MARK: Undo a turn (H3)
+
+    enum UndoPlan: Equatable {
+        /// Codex: files back to the checkpoint and `thread/revert` drops the turn.
+        case inPlace
+        /// Claude Code and Cursor cannot drop a turn from their session: a new
+        /// branch node starts from the checkpoint, inheriting through the reply before.
+        case branch(previousReply: UUID?)
+    }
+
+    /// How "撤销这一回合" would work for this reply; nil when it cannot.
+    func undoPlan(boardID: UUID, nodeID: UUID, messageID: UUID) -> UndoPlan? {
+        guard let node = board(boardID)?.node(nodeID), node.worktree != nil, let session = sessionsByID[node.sessionID],
+              let index = session.messages.firstIndex(where: { $0.id == messageID }),
+              session.messages[index].role == .assistant, session.messages[index].checkpoint != nil else { return nil }
+        if session.provider == .codex, session.messages[index].providerTurnID != nil, session.remoteSessionID != nil { return .inPlace }
+        let previous = session.messages[..<index].last { $0.role == .assistant && $0.state == .complete }
+        return .branch(previousReply: previous?.id)
+    }
+
+    func undoTurn(boardID: UUID, nodeID: UUID, messageID: UUID) {
+        guard let plan = undoPlan(boardID: boardID, nodeID: nodeID, messageID: messageID), let node = board(boardID)?.node(nodeID),
+              let worktree = node.worktree, let session = sessionsByID[node.sessionID],
+              let message = session.messages.first(where: { $0.id == messageID }), let checkpoint = message.checkpoint else { return }
+        guard !app.runningSessionIDs.contains(session.id), !gitBusy.contains(nodeID) else { app.errorMessage = "这个节点还在回复，等它结束再撤销。"; return }
+        switch plan {
+        case .inPlace:
+            guard let thread = session.remoteSessionID, let turn = message.providerTurnID else { return }
+            let executable = URL(fileURLWithPath: NSString(string: app.configuration[.codex].executablePath).expandingTildeInPath)
+            gitBusy.insert(nodeID)
+            Task {
+                defer { gitBusy.remove(nodeID) }
+                do {
+                    try await git { try ProjectGit.ensure(worktree) }
+                    // History first: if Codex refuses, the files stay as they are.
+                    try await CodexBackend.revert(executableURL: executable, directory: URL(fileURLWithPath: worktree.workingDirectory), threadID: thread, beforeTurnID: turn)
+                    try await git { try ProjectGit.restore(worktree, to: checkpoint) }
+                    app.dropMessages(sessionID: session.id, from: messageID)
+                    await refreshChanges(boardID: boardID, nodeID: nodeID)
+                    app.noticeMessage = "已撤销这一回合：worktree 回到回合开始前，Codex 会话也删掉了这一回合及之后的回合。"
+                } catch { app.errorMessage = "撤销失败：\(SafeText.redact(error.localizedDescription))" }
+            }
+        case .branch(let previous):
+            let childID = UUID()
+            placeBranch(boardID: boardID, parentID: nodeID, childID: childID, inheritThrough: previous,
+                        title: "撤销后 · \(session.title)", start: { checkpoint })
         }
     }
 
@@ -588,8 +670,17 @@ final class CanvasModel: ObservableObject {
                                                    imageBudget: CanvasContextBuilder.maxImagesPerTurn - draftImages,
                                                    diffs: diffSummaries(board: board, into: nodeID))
         let access = CanvasWriteAccess.decide(board: board, nodeID: nodeID, sessions: sessionsByID, writers: writingSessions)
-        guard app.send(text, to: node.sessionID, context: context, project: board.project, writable: access.writable) else { return false }
+        // A writing turn in a worktree starts from a checkpoint it can be undone to.
+        let replyID = UUID()
+        var checkpoint: String?
+        if access.writable, let worktree = node.worktree, !app.runningSessionIDs.contains(node.sessionID) {
+            do { checkpoint = try ProjectGit.checkpoint(worktree, message: replyID) }
+            catch { app.errorMessage = "无法记录检查点，这一回合不能撤销：\(error.localizedDescription)" }
+        }
+        guard app.send(text, to: node.sessionID, context: context, project: board.project, writable: access.writable,
+                       assistantID: replyID, checkpoint: checkpoint) else { return false }
         if access.writable { writingSessions.insert(node.sessionID) }
+        if let checkpoint { checkpointedTurns[node.sessionID] = (boardID, nodeID, replyID, checkpoint) }
         if let reason = access.reason { app.noticeMessage = reason }
         if context.fork != nil, let edge = board.inheritEdge(into: nodeID) { pendingForks[node.sessionID] = (boardID, edge.id) }
         // Each upstream reply and source version is delivered once; a new one makes the edge pending again.
@@ -635,6 +726,7 @@ final class CanvasModel: ObservableObject {
             do {
                 switch try await git({ try ProjectGit.mergeToBase(worktree, title: title) }) {
                 case .merged(let commit):
+                    await refreshChanges(boardID: boardID, nodeID: nodeID)
                     app.noticeMessage = "已把「\(title)」合并到 \(worktree.baseBranch ?? "基础分支")（\(commit.prefix(8))）。没有推送。"
                 case .upToDate:
                     app.noticeMessage = "「\(title)」没有需要合并的新改动。"

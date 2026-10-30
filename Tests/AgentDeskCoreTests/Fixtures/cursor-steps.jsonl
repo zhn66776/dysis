@@ -1,0 +1,10 @@
+{"type":"system","subtype":"init","session_id":"cur-fixture","model":"grok-4.7-medium","cwd":"/wt/c"}
+{"type":"tool_call","subtype":"started","call_id":"tool_1","session_id":"cur-fixture","tool_call":{"readToolCall":{"args":{"path":"README.md"}}}}
+{"type":"tool_call","subtype":"completed","call_id":"tool_1","session_id":"cur-fixture","tool_call":{"readToolCall":{"args":{"path":"README.md"},"result":{"success":{"content":"# Demo\nhello\n","totalLines":2}}}}}
+{"type":"tool_call","subtype":"started","call_id":"tool_2","session_id":"cur-fixture","tool_call":{"editToolCall":{"args":{"path":"README.md"}}}}
+{"type":"tool_call","subtype":"completed","call_id":"tool_2","session_id":"cur-fixture","tool_call":{"editToolCall":{"args":{"path":"README.md"},"result":{"success":{"path":"README.md","linesAdded":1,"linesRemoved":0,"diffString":"@@ -2 +2,2 @@\n hello\n+world"}}}}}
+{"type":"tool_call","subtype":"started","call_id":"tool_3","session_id":"cur-fixture","tool_call":{"shellToolCall":{"args":{"command":"npm test","workingDirectory":"/wt/c"}}}}
+{"type":"tool_call","subtype":"completed","call_id":"tool_3","session_id":"cur-fixture","tool_call":{"shellToolCall":{"args":{"command":"npm test"},"result":{"success":{"exitCode":1,"stdout":"1 failing","stderr":""}}}}}
+{"type":"tool_call","subtype":"started","call_id":"tool_4","session_id":"cur-fixture","tool_call":{"shellToolCall":{"args":{"command":"curl example.com"}}}}
+{"type":"tool_call","subtype":"completed","call_id":"tool_4","session_id":"cur-fixture","tool_call":{"shellToolCall":{"args":{"command":"curl example.com"},"result":{"rejected":{"reason":"Shell is not allowed in this mode"}}}}}
+{"type":"result","subtype":"success","session_id":"cur-fixture","result":"README 已更新。","is_error":false}
