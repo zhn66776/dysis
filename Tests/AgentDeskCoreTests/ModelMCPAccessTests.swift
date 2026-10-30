@@ -36,6 +36,7 @@ final class ModelMCPAccessTests: XCTestCase {
         XCTAssertEqual(value(after: "--mcp-config", in: args), #"{"mcpServers":{}}"#)
         XCTAssertEqual(value(after: "--max-turns", in: args), "1")
         XCTAssertFalse(args.contains("--allowedTools"))
+        XCTAssertTrue(args.contains("--safe-mode"))
     }
 
     func testClaudeGetsOnlyTheOpenedServersTools() throws {
@@ -46,6 +47,8 @@ final class ModelMCPAccessTests: XCTestCase {
         XCTAssertEqual(value(after: "--allowedTools", in: args), "mcp__portfolio,mcp__remote")
         XCTAssertEqual(value(after: "--max-turns", in: args), String(ClaudeBackend.maxToolTurns))
         XCTAssertTrue(args.contains("--strict-mcp-config"))
+        XCTAssertTrue(args.contains("--restricted"))
+        XCTAssertFalse(args.contains("--safe-mode"), "safe mode drops --mcp-config servers")
         let config = try XCTUnwrap(value(after: "--mcp-config", in: args))
         let object = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(config.utf8)) as? [String: [String: [String: Any]]])
         XCTAssertEqual(object["mcpServers"]?["portfolio"]?["command"] as? String, "/Users/me/My-Portfolio/.venv/bin/python")
@@ -75,6 +78,11 @@ final class ModelMCPAccessTests: XCTestCase {
         XCTAssertTrue(overrides.contains(#"mcp_servers.agentdesk_robinhood-trading.url="http://127.0.0.1:9/mcp""#))
         XCTAssertTrue(overrides.contains("features.shell_tool=false"))
         XCTAssertTrue(overrides.contains(#"sandbox_mode="read-only""#))
+    }
+
+    func testCodexInstructionsOnlyForbidToolsWithoutServers() {
+        XCTAssertEqual(CodexBackend.baseInstructions(mcpServers: []), "Use no tools in this session. Answer with text only.")
+        XCTAssertTrue(CodexBackend.baseInstructions(mcpServers: [AgentMCPServer(name: "portfolio", transport: python)]).contains("portfolio"))
     }
 
     func testCodexApprovesToolCallsOnlyForOurServers() {
@@ -107,8 +115,11 @@ final class ModelMCPAccessTests: XCTestCase {
         let url = workspace.appendingPathComponent(".cursor/mcp.json")
         let object = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: [String: [String: Any]]])
         XCTAssertEqual(object["mcpServers"]?["portfolio"]?["args"] as? [String], ["-m", "portfolio_analytics.mcp_server"])
+        let permissions = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: workspace.appendingPathComponent(".cursor/cli.json"))) as? [String: [String: [String]]])
+        XCTAssertEqual(permissions["permissions"]?["allow"], ["Mcp(portfolio:*)"])
         try CursorBackend.writeMCPConfig([], workspace: workspace)
         XCTAssertFalse(FileManager.default.fileExists(atPath: url.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: workspace.appendingPathComponent(".cursor/cli.json").path))
     }
 
     private func value(after flag: String, in args: [String]) -> String? {

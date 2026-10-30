@@ -326,7 +326,10 @@ public final class CodexBackend: AgentBackend, @unchecked Sendable {
                             "threadId": existing,
                             "cwd": request.workingDirectory.path,
                             "approvalPolicy": "never",
-                            "sandbox": "read-only"
+                            "sandbox": "read-only",
+                            // Restated on resume: the thread keeps what it
+                            // started with, and the opened servers can change.
+                            "baseInstructions": Self.baseInstructions(mcpServers: mcpServers)
                         ]
                         if !request.modelID.isEmpty { params["model"] = request.modelID }
                         _ = try send("thread/resume", params: params, step: .thread)
@@ -338,7 +341,7 @@ public final class CodexBackend: AgentBackend, @unchecked Sendable {
                             "cwd": request.workingDirectory.path,
                             "approvalPolicy": "never",
                             "sandbox": "read-only",
-                            "baseInstructions": "Use no tools in this session. Answer with text only.",
+                            "baseInstructions": Self.baseInstructions(mcpServers: mcpServers),
                             "excludeTurns": true
                         ]
                         if let turn = fork.throughTurnID { params["lastTurnId"] = turn }
@@ -349,7 +352,7 @@ public final class CodexBackend: AgentBackend, @unchecked Sendable {
                             "cwd": request.workingDirectory.path,
                             "approvalPolicy": "never",
                             "sandbox": "read-only",
-                            "baseInstructions": "Use no tools in this session. Answer with text only."
+                            "baseInstructions": Self.baseInstructions(mcpServers: mcpServers)
                         ]
                         if !request.modelID.isEmpty { params["model"] = request.modelID }
                         _ = try send("thread/start", params: params, step: .thread)
@@ -444,6 +447,14 @@ public final class CodexBackend: AgentBackend, @unchecked Sendable {
             return servers.keys.sorted()
         }
         throw AgentError.processFailure("Codex discovery 未返回有效配置。")
+    }
+
+    /// A thread told to use no tools never calls an opened MCP server, even
+    /// with it loaded (checked live with codex-cli 0.165).
+    static func baseInstructions(mcpServers: [AgentMCPServer]) -> String {
+        guard !mcpServers.isEmpty else { return "Use no tools in this session. Answer with text only." }
+        let names = mcpServers.map(\.name).joined(separator: ", ")
+        return "The only tools in this session are those of the MCP servers \(names), which the user opened to you. Call them whenever they help answer; do not try any other tool. Otherwise answer with text."
     }
 
     /// The user's own Codex MCP servers stay disabled; ours get a name that

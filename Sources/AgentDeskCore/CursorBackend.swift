@@ -105,10 +105,15 @@ public struct CursorBackend: AgentBackend, Sendable {
     /// Cursor reads MCP servers from the workspace's `.cursor/mcp.json`; the
     /// workspace is this chat's own folder, so the file is rewritten (or
     /// removed) on every send to match what the user opened to the model.
+    ///
+    /// Ask mode blocks every MCP call unless the permissions config allows it
+    /// explicitly, so `.cursor/cli.json` allows exactly these servers' tools
+    /// (`Mcp(<name>:*)`); shell and file edits stay off in ask mode.
     static func writeMCPConfig(_ servers: [AgentMCPServer], workspace: URL) throws {
         let url = workspace.appendingPathComponent(".cursor/mcp.json")
+        let permissions = workspace.appendingPathComponent(".cursor/cli.json")
         guard !servers.isEmpty else {
-            if FileManager.default.fileExists(atPath: url.path) { try FileManager.default.removeItem(at: url) }
+            for file in [url, permissions] where FileManager.default.fileExists(atPath: file.path) { try FileManager.default.removeItem(at: file) }
             return
         }
         var map: [String: Any] = [:]
@@ -120,6 +125,8 @@ public struct CursorBackend: AgentBackend, Sendable {
         }
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         try JSONSerialization.data(withJSONObject: ["mcpServers": map], options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]).write(to: url, options: .atomic)
+        let allow = servers.map { "Mcp(\($0.name):*)" }
+        try JSONSerialization.data(withJSONObject: ["permissions": ["allow": allow, "deny": [String]()]], options: [.prettyPrinted, .sortedKeys]).write(to: permissions, options: .atomic)
     }
 
     /// Cursor may prefix the configured name (for example with the project);
@@ -197,7 +204,7 @@ public enum CursorJSONEventParser {
             if let call = object["tool_call"] as? [String: Any],
                let mcp = call.first(where: { $0.key.lowercased().contains("mcp") })?.value as? [String: Any] {
                 let args = mcp["args"] as? [String: Any] ?? mcp
-                event.mcpToolCall = CursorMCPCall(server: args["providerIdentifier"] as? String ?? args["serverName"] as? String,
+                event.mcpToolCall = CursorMCPCall(server: args["providerIdentifier"] as? String ?? args["server"] as? String ?? args["serverName"] as? String,
                                                   tool: args["toolName"] as? String ?? args["name"] as? String)
             }
         }

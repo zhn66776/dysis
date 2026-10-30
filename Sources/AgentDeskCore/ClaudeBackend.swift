@@ -179,7 +179,10 @@ public struct ClaudeBackend: AgentBackend, Sendable {
             ? ["--mcp-config", "{\"mcpServers\":{}}", "--tools", "", "--disallowedTools", "mcp__*"]
             : ["--mcp-config", try mcpConfigJSON(mcpServers), "--tools", "",
                "--allowedTools", mcpServers.map { "mcp__\($0.name)" }.joined(separator: ",")]
-        var arguments = ["--safe-mode", "--restricted", "--strict-mcp-config"] + toolArguments + [
+        // --safe-mode also drops servers passed with --mcp-config (checked
+        // live with Claude Code 2.1.308), so a turn with MCP relies on
+        // --restricted, --strict-mcp-config and --tools "" alone.
+        var arguments = (mcpServers.isEmpty ? ["--safe-mode"] : []) + ["--restricted", "--strict-mcp-config"] + toolArguments + [
             "--permission-mode", "dontAsk", "--permission-prompts", "none",
             "--max-turns", mcpServers.isEmpty ? "1" : String(maxToolTurns), "--model", modelID,
             "--output-format", "stream-json", "--verbose",
