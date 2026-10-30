@@ -118,6 +118,24 @@ final class ModelMCPAccessTests: XCTestCase {
         XCTAssertFalse(CursorBackend.allows("portfolio", among: []))
     }
 
+    func testCursorTellsDeniedBuiltInToolsFromOnesThatRan() {
+        let read: [String: Any] = ["path": "/w/notes.txt"]
+        let denied = CursorJSONEventParser.parse(["type": "tool_call", "subtype": "completed",
+                                                  "tool_call": ["readToolCall": ["args": read, "result": ["error": ["errorMessage": "Permission denied"]]]]])
+        XCTAssertTrue(denied.hasToolCall)
+        XCTAssertFalse(denied.builtInToolSucceeded)
+        XCTAssertFalse(denied.isToolCallStart)
+        XCTAssertEqual(denied.builtInTool, "read")
+        let ran = CursorJSONEventParser.parse(["type": "tool_call", "subtype": "completed",
+                                               "tool_call": ["readToolCall": ["args": read, "result": ["success": ["content": "x"]]]]])
+        XCTAssertTrue(ran.builtInToolSucceeded)
+        let search = CursorJSONEventParser.parse(["type": "tool_call", "subtype": "completed",
+                                                  "tool_call": ["getMcpToolsToolCall": ["args": ["pattern": "x"], "result": ["success": ["content": "{}"]]]]])
+        XCTAssertNotNil(search.mcpToolCall)
+        XCTAssertFalse(search.builtInToolSucceeded)
+        XCTAssertTrue(CursorJSONEventParser.parse(["type": "tool_call", "subtype": "started", "tool_call": ["readToolCall": ["args": read]]]).isToolCallStart)
+    }
+
     func testCursorWorkspaceConfigFollowsTheOpenedServers() throws {
         let workspace = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: workspace) }
@@ -128,6 +146,7 @@ final class ModelMCPAccessTests: XCTestCase {
         XCTAssertEqual(object["mcpServers"]?["portfolio"]?["args"] as? [String], ["-m", "portfolio_analytics.mcp_server"])
         let permissions = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: workspace.appendingPathComponent(".cursor/cli.json"))) as? [String: [String: [String]]])
         XCTAssertEqual(permissions["permissions"]?["allow"], ["Mcp(portfolio:*)"])
+        XCTAssertEqual(permissions["permissions"]?["deny"], ["Read(**)", "Write(**)", "Shell(*)"])
         try CursorBackend.writeMCPConfig([], workspace: workspace)
         XCTAssertFalse(FileManager.default.fileExists(atPath: url.path))
         XCTAssertFalse(FileManager.default.fileExists(atPath: workspace.appendingPathComponent(".cursor/cli.json").path))
