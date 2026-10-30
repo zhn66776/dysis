@@ -7,6 +7,7 @@ export function Sidebar({ state, collapsed, onToggle }: { state: AppState; colla
   if (collapsed) {
     return (
       <nav className="rail">
+        <div className="rail-drag" data-drag />
         <button className="icon-btn" aria-label="展开侧栏" onClick={onToggle}>☰</button>
         <button className="icon-btn" aria-label="新画布" onClick={() => send({ type: 'board.create' })}>＋</button>
         <span className="spacer" />
@@ -16,7 +17,7 @@ export function Sidebar({ state, collapsed, onToggle }: { state: AppState; colla
   }
   return (
     <nav className="sidebar">
-      <div className="brand-row">
+      <div className="brand-row" data-drag>
         <span className="brand">AgentDesk</span>
         <button className="icon-btn" aria-label="收起侧栏" onClick={onToggle}>‹</button>
       </div>

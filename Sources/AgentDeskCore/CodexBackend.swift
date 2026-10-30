@@ -460,6 +460,10 @@ public final class CodexBackend: AgentBackend, @unchecked Sendable {
             "features.codex_apps_mcp_2026_07_28=false",
             "features.enable_mcp_apps=false",
             "features.apps=false",
+            // Memories would carry context from the user's other Codex work
+            // into an isolated conversation, and its consolidation thread
+            // runs in the same app-server (it was seen stalling turns).
+            "features.memories=false",
             "approval_policy=\"never\"",
             "sandbox_mode=\"read-only\""
         ]

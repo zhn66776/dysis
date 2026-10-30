@@ -187,7 +187,7 @@ export function Canvas({ state, selectedNodeID, onSelect }: { state: AppState; s
         <Controls showInteractive={false} position="bottom-left" />
       </ReactFlow>
 
-      <div className="canvas-top">
+      <div className="canvas-top" data-drag>
         <span className="canvas-title">{board.title}</span>
         <span className="spacer" />
         {selectedIDs.length >= 2 && (

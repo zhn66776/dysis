@@ -244,3 +244,14 @@ input, textarea { font: inherit; color: var(--tx); }
 .btn.danger { background: var(--bad); border-color: var(--bad); color: var(--bad-bg); font-weight: 500; }
 .btn.danger:hover { opacity: 0.88; border-color: var(--bad); }
 @media (prefers-color-scheme: dark) { .modal-backdrop { background: rgba(0, 0, 0, 0.45); } .modal { box-shadow: 0 12px 32px rgba(0,0,0,0.5); } }
+
+/* Transparent title bar (native app only): Swift sets --chrome-top / --chrome-left.
+   The top strip shares the page colours; [data-drag] areas move the window. */
+.chrome-inset .sidebar { padding-top: 0; }
+.chrome-inset .brand-row { height: var(--chrome-top); padding: 0 6px 0 calc(var(--chrome-left) + 8px); margin-bottom: 6px; }
+.chrome-inset .rail { padding-top: 0; }
+.rail-drag { display: none; }
+.chrome-inset .rail-drag { display: block; flex: none; width: 100%; height: var(--chrome-top); }
+.chrome-inset .canvas-top { top: 0; height: var(--chrome-top); }
+.chrome-inset .rail-shown .canvas-top { left: max(14px, calc(var(--chrome-left) - 44px + 12px)); }
+.chrome-inset .panel-head { padding-top: calc((var(--chrome-top) - 22px) / 2); }

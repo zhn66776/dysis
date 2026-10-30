@@ -60,7 +60,7 @@ struct PlazaDetail: View {
             Button("复制记录") { copyTranscript(record) }.buttonStyle(GhostButtonStyle()).help("复制讨论记录")
             ReplyExportMenu(text: transcriptText(record), title: record.room.title).disabled(record.runs.isEmpty || isRunning)
             Button("成员") { showMembers.toggle() }.buttonStyle(GhostButtonStyle(selected: showMembers)).help("成员与共享资料")
-        }.padding(.horizontal, 20).padding(.vertical, 12).background(Theme.panel)
+        }.padding(.horizontal, 20).padding(.vertical, 12).background(Theme.panel.ignoresSafeArea(edges: .top))
     }
 
     private func transcript(_ record: PlazaRecord) -> some View {

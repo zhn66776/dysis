@@ -13,6 +13,29 @@ final class CLIProcessLifecycleTests: XCTestCase {
         XCTAssertEqual(result.stdout, "before-exit\n")
     }
 
+    /// A CLI started from a thread that blocks SIGCHLD (as dispatch and Swift
+    /// concurrency workers do) must not inherit that mask: Codex relies on
+    /// SIGCHLD to notice its own helper processes exiting.
+    func testChildStartsWithNoBlockedSignalsAndDefaultHandlers() async throws {
+        let process = CLIProcess(
+            executable: URL(fileURLWithPath: "/usr/bin/python3"),
+            arguments: ["-c", "import signal; b = signal.pthread_sigmask(signal.SIG_BLOCK, []); print('blocked=' + ','.join(sorted(str(int(x)) for x in b)), flush=True); print('chld=' + str(signal.getsignal(signal.SIGCHLD) == signal.SIG_DFL), flush=True)"],
+            directory: FileManager.default.temporaryDirectory,
+            environment: RuntimeEnvironment.subscriptionOnly(),
+            timeout: 30
+        )
+        // Spawn from a thread with SIGCHLD and SIGUSR1 blocked.
+        var block = sigset_t(), previous = sigset_t()
+        sigemptyset(&block); sigaddset(&block, SIGCHLD); sigaddset(&block, SIGUSR1)
+        XCTAssertEqual(pthread_sigmask(SIG_BLOCK, &block, &previous), 0)
+        defer { pthread_sigmask(SIG_SETMASK, &previous, nil) }
+        try process.start()
+        process.finishInput()
+        var lines: [String] = []
+        for await event in process.events { if case .stdoutLine(let line) = event { lines.append(line) } }
+        XCTAssertEqual(lines, ["blocked=", "chld=True"])
+    }
+
     func testCancellationKillsIgnoredTermProcessQuickly() async throws {
         let process = CLIProcess(
             executable: URL(fileURLWithPath: "/usr/bin/python3"),

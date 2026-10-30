@@ -505,3 +505,40 @@ struct DangerButtonStyle: ButtonStyle {
             .contentShape(RoundedRectangle(cornerRadius: 8))
     }
 }
+
+// MARK: Window chrome
+
+extension View {
+    /// Hides the separate title-bar strip: the title bar becomes transparent
+    /// and the window's own background runs up to the top edge, with the
+    /// traffic lights drawn over it. Content stays below the title bar via the
+    /// safe area unless a view ignores it.
+    func transparentTitleBar() -> some View { background(TitleBarConfigurator()) }
+}
+
+private struct TitleBarConfigurator: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView { WindowHook() }
+    func updateNSView(_ nsView: NSView, context: Context) {}
+
+    final class WindowHook: NSView {
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            NotificationCenter.default.removeObserver(self)
+            guard let window else { return }
+            apply()
+            // SwiftUI may restore its own title-bar look when the window's state changes.
+            for name in [NSWindow.didBecomeKeyNotification, NSWindow.didResignKeyNotification, NSWindow.didExitFullScreenNotification] {
+                NotificationCenter.default.addObserver(self, selector: #selector(apply), name: name, object: window)
+            }
+        }
+
+        @objc private func apply() {
+            guard let window else { return }
+            window.titlebarAppearsTransparent = true
+            window.titleVisibility = .hidden
+            window.styleMask.insert(.fullSizeContentView)
+            window.titlebarSeparatorStyle = .none
+            if let toolbar = window.toolbar { toolbar.isVisible = false }
+        }
+    }
+}
