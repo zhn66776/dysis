@@ -75,11 +75,14 @@ public struct CursorBackend: AgentBackend, Sendable {
                             if let status = parsed.status, !status.isEmpty { continuation.yield(.status(status)) }
                             if parsed.isFailure { throw AgentError.protocolFailure(SafeText.redact(parsed.failureMessage ?? "Cursor CLI 返回失败结果。")) }
                             if let call = parsed.mcpToolCall, CursorBackend.allows(call.server, among: allowedMCP) {
-                                if let tool = call.tool { continuation.yield(.status("正在调用 MCP 工具 \(call.server ?? "MCP") · \(tool)…")) }
+                                if parsed.isToolCallStart, let tool = call.tool { continuation.yield(.status("正在调用 MCP 工具 \(call.server ?? "MCP") · \(tool)…")) }
+                            } else if parsed.hasToolCall, !allowedMCP.isEmpty, !parsed.builtInToolSucceeded {
+                                // Denied by the workspace permissions; the model gets the error and goes on.
+                                if parsed.isToolCallStart { continuation.yield(.status("Cursor 想用内置工具 \(parsed.builtInTool ?? "")，已拒绝；你的 MCP 仍可用，继续回答…")) }
                             } else if parsed.hasToolCall {
                                 throw AgentError.protocolFailure(allowedMCP.isEmpty
                                     ? "Cursor 想调用工具，但 AgentDesk 不给 Cursor 内置工具；本轮已停止。要让模型自己查 MCP，请在 MCP 工具里打开“让模型自己调用”。"
-                                    : "Cursor 想调用 MCP 以外的工具（读文件、运行命令等），AgentDesk 不允许；本轮已停止。")
+                                    : "Cursor 的内置工具（读文件、运行命令等）没有被权限拦住，AgentDesk 已停止本轮。")
                             }
                         case .stderrLine(let line):
                             if line.localizedCaseInsensitiveContains("login") {
@@ -108,7 +111,8 @@ public struct CursorBackend: AgentBackend, Sendable {
     ///
     /// Ask mode blocks every MCP call unless the permissions config allows it
     /// explicitly, so `.cursor/cli.json` allows exactly these servers' tools
-    /// (`Mcp(<name>:*)`); shell and file edits stay off in ask mode.
+    /// (`Mcp(<name>:*)`) and denies the built-in file and shell tools, so a
+    /// model that reaches for them gets "Permission denied" and carries on.
     static func writeMCPConfig(_ servers: [AgentMCPServer], workspace: URL) throws {
         let url = workspace.appendingPathComponent(".cursor/mcp.json")
         let permissions = workspace.appendingPathComponent(".cursor/cli.json")
@@ -126,8 +130,10 @@ public struct CursorBackend: AgentBackend, Sendable {
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         try JSONSerialization.data(withJSONObject: ["mcpServers": map], options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]).write(to: url, options: .atomic)
         let allow = servers.map { "Mcp(\($0.name):*)" }
-        try JSONSerialization.data(withJSONObject: ["permissions": ["allow": allow, "deny": [String]()]], options: [.prettyPrinted, .sortedKeys]).write(to: permissions, options: .atomic)
+        try JSONSerialization.data(withJSONObject: ["permissions": ["allow": allow, "deny": deniedBuiltInTools]], options: [.prettyPrinted, .sortedKeys]).write(to: permissions, options: .atomic)
     }
+
+    static let deniedBuiltInTools = ["Read(**)", "Write(**)", "Shell(*)"]
 
     /// Cursor may prefix the configured name (for example with the project);
     /// an unnamed call is still one of ours, since only ours are configured.
@@ -171,6 +177,13 @@ public struct CursorJSONEvent: Equatable, Sendable {
     public var hasToolCall: Bool
     /// Set for an MCP tool call (`tool_call.mcpToolCall`); server and tool when given.
     public var mcpToolCall: CursorMCPCall?
+    /// `tool_call` with subtype `started`.
+    public var isToolCallStart = false
+    /// A non-MCP tool call that completed with a `success` result: one the
+    /// permissions did not stop.
+    public var builtInToolSucceeded = false
+    /// The non-MCP tool's name, e.g. "read" for `readToolCall`.
+    public var builtInTool: String?
 }
 
 public struct CursorMCPCall: Equatable, Sendable {
@@ -201,11 +214,17 @@ public enum CursorJSONEventParser {
         }
         if type == "tool_call" {
             event.hasToolCall = true
-            if let call = object["tool_call"] as? [String: Any],
-               let mcp = call.first(where: { $0.key.lowercased().contains("mcp") })?.value as? [String: Any] {
+            event.isToolCallStart = object["subtype"] as? String == "started"
+            let call = object["tool_call"] as? [String: Any] ?? [:]
+            if let mcp = call.first(where: { $0.key.lowercased().contains("mcp") })?.value as? [String: Any] {
                 let args = mcp["args"] as? [String: Any] ?? mcp
                 event.mcpToolCall = CursorMCPCall(server: args["providerIdentifier"] as? String ?? args["server"] as? String ?? args["serverName"] as? String,
                                                   tool: args["toolName"] as? String ?? args["name"] as? String)
+            } else {
+                event.builtInTool = call.keys.first { $0.hasSuffix("ToolCall") }.map { String($0.dropLast("ToolCall".count)) }
+            }
+            if event.mcpToolCall == nil, object["subtype"] as? String == "completed" {
+                event.builtInToolSucceeded = call.values.contains { (($0 as? [String: Any])?["result"] as? [String: Any])?["success"] != nil }
             }
         }
         if type == "result" || type == "final" {

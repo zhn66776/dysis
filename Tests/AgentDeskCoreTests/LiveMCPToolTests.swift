@@ -42,12 +42,21 @@ final class LiveMCPToolTests: XCTestCase {
         try await run(CursorBackend(), executable: url, model: environment["AGENTDESK_LIVE_CURSOR_MODEL"] ?? "grok-4.7-medium")
     }
 
-    private func run(_ backend: AgentBackend, executable: URL, model: String) async throws {
+    /// Cursor reaching for a built-in tool first: it is denied and the turn goes on.
+    func testCursorDeniedReadThenMCP() async throws {
+        let url = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".local/bin/agent")
+        try "secret note\n".write(to: root.appendingPathComponent("work/notes.txt"), atomically: true, encoding: .utf8)
+        try await run(CursorBackend(), executable: url, model: environment["AGENTDESK_LIVE_CURSOR_MODEL"] ?? "grok-4.7-medium",
+                      prompt: "First read notes.txt in the workspace. Then use the livecheck MCP server's get_code tool and reply with the code it returns.")
+    }
+
+    private func run(_ backend: AgentBackend, executable: URL, model: String,
+                     prompt: String = "Use the livecheck MCP server's get_code tool, then reply with only the code it returns.") async throws {
         try XCTSkipUnless(FileManager.default.isExecutableFile(atPath: executable.path), "\(executable.lastPathComponent) is not installed.")
         let log = root.appendingPathComponent("calls.log")
         let server = AgentMCPServer(name: "livecheck", transport: .stdio(command: "/usr/bin/python3", arguments: ["-I", root.appendingPathComponent("fixture.py").path, log.path]))
         let request = AgentRequest(localSessionID: UUID(), remoteSessionID: nil,
-                                   prompt: "Use the livecheck MCP server's get_code tool, then reply with only the code it returns.",
+                                   prompt: prompt,
                                    workingDirectory: root.appendingPathComponent("work"), modelID: model, executableURL: executable, mcpServers: [server])
         var text = "", statuses: [String] = [], completed = false
         let stream = backend.stream(request)
