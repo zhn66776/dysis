@@ -484,6 +484,10 @@ public final class CodexBackend: AgentBackend, @unchecked Sendable {
             "features.codex_apps_mcp_2026_07_28=false",
             "features.enable_mcp_apps=false",
             "features.apps=false",
+            // Plugin MCP servers (cua_repl, codex_app, …) are absent from
+            // config/read, so they cannot be disabled by name; with plugins
+            // on, cua_repl still listed its js tools (codex-cli 0.165).
+            "features.plugins=false",
             // Memories would carry context from the user's other Codex work
             // into an isolated conversation, and its consolidation thread
             // runs in the same app-server (it was seen stalling turns).

@@ -77,7 +77,18 @@ final class ModelMCPAccessTests: XCTestCase {
         XCTAssertTrue(overrides.contains("mcp_servers.portfolio.enabled=true"))
         XCTAssertTrue(overrides.contains(#"mcp_servers.agentdesk_robinhood-trading.url="http://127.0.0.1:9/mcp""#))
         XCTAssertTrue(overrides.contains("features.shell_tool=false"))
+        XCTAssertTrue(overrides.contains("features.plugins=false"))
         XCTAssertTrue(overrides.contains(#"sandbox_mode="read-only""#))
+    }
+
+    func testCodexTurnsPluginServersOffWithOrWithoutOpenedServers() throws {
+        for servers in [[], [AgentMCPServer(name: "portfolio", transport: python)]] {
+            let args = try CodexBackend.appServerArguments(providing: servers)
+            let overrides = stride(from: 0, to: args.count, by: 1).compactMap { args[$0] == "-c" ? args[$0 + 1] : nil }
+            XCTAssertTrue(overrides.contains("features.plugins=false"))
+            // Plugin servers are not in config/read; naming one fails with "invalid transport".
+            XCTAssertFalse(overrides.contains { $0.hasPrefix("mcp_servers.cua_repl") || $0.hasPrefix("mcp_servers.codex_app") })
+        }
     }
 
     func testCodexInstructionsOnlyForbidToolsWithoutServers() {
