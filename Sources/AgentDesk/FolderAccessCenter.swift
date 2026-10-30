@@ -32,8 +32,9 @@ final class FolderAccessCenter: ObservableObject {
         Bundle.main.executableURL?.deletingLastPathComponent().appendingPathComponent("agentdesk-files")
     }
 
-    func server(for sessionID: UUID, dataRoot: URL) -> AgentMCPServer? {
-        Self.helperURL.flatMap { FolderAccessPolicy.server(helper: $0, dataRoot: dataRoot, sessionID: sessionID, token: token) }
+    /// `approvals`: the project folder, when the server also answers Claude Code's permission prompts.
+    func server(for sessionID: UUID, dataRoot: URL, files: Bool = true, approvals: String? = nil) -> AgentMCPServer? {
+        Self.helperURL.flatMap { FolderAccessPolicy.server(helper: $0, dataRoot: dataRoot, sessionID: sessionID, token: token, files: files, approvals: approvals) }
     }
 
     func poll() {

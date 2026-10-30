@@ -20,6 +20,8 @@ public struct CanvasNode: Identifiable, Codable, Equatable, Sendable {
     public var merge: CanvasMergeTemplate?
     /// Set on source nodes: read-only files or an MCP result that feed data edges.
     public var source: CanvasSource?
+    /// A lower permission level than the board's for this node; nil follows the board.
+    public var permissionLevel: PermissionLevel?
     public init(id: UUID = UUID(), sessionID: UUID, position: CanvasPoint, merge: CanvasMergeTemplate? = nil) {
         self.id = id; self.sessionID = sessionID; self.position = position; self.merge = merge
     }
@@ -178,13 +180,15 @@ public enum CanvasError: LocalizedError, Equatable, Sendable {
 }
 
 /// A folder on disk that a board's conversations work in, like a project
-/// opened in an editor. Once trusted, every conversation on the board may
-/// write files and run commands (with network) there.
+/// opened in an editor. Once trusted, the board's conversations work there
+/// at its permission level (`level`, in Harness.swift).
 public struct CanvasProject: Codable, Equatable, Sendable {
     public var path: String
     /// nil until asked; false when the user chose to only chat.
     public var trusted: Bool?
-    public init(path: String, trusted: Bool? = nil) { self.path = path; self.trusted = trusted }
+    /// nil on projects trusted before levels existed: they stay automatic.
+    public var permissionLevel: PermissionLevel?
+    public init(path: String, trusted: Bool? = nil, permissionLevel: PermissionLevel? = nil) { self.path = path; self.trusted = trusted; self.permissionLevel = permissionLevel }
     public var name: String { URL(fileURLWithPath: path).lastPathComponent }
     public var isTrusted: Bool { trusted == true }
 

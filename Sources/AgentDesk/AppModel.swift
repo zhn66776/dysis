@@ -29,6 +29,7 @@ final class AppModel: ObservableObject {
     let plaza: PlazaModel
     let attachmentDrafts: AttachmentDrafts
     let folderAccess: FolderAccessCenter
+    let approvals: ApprovalCenter
     var dataRoot: URL { plaza.root }
 
     var selectedSession: ChatSession? { sessions.first { $0.id == selectedSessionID } }
@@ -38,6 +39,7 @@ final class AppModel: ObservableObject {
         plaza = PlazaModel(root: resolvedRoot)
         attachmentDrafts = AttachmentDrafts(root: resolvedRoot)
         folderAccess = FolderAccessCenter(root: resolvedRoot)
+        approvals = ApprovalCenter(exchange: folderAccess.exchange, token: folderAccess.token)
         configuration = Self.defaults()
         do {
             let store = try LocalStore(root: root)
@@ -136,6 +138,7 @@ final class AppModel: ObservableObject {
         stop(sessionID: id)
         sessions.removeAll { $0.id == id }
         folderAccess.forget(session: id)
+        approvals.forget(session: id)
         if selectedSessionID == id { selectedSessionID = sessions.first?.id }
         persist()
     }
@@ -148,12 +151,14 @@ final class AppModel: ObservableObject {
 
     /// MCP servers the user opened to the model (MCP 工具 → 让模型自己调用),
     /// read on every send so a change applies to the next message.
-    /// AgentDesk's files server joins them when folder access is on.
-    private func modelMCPServers(sessionID: UUID) -> [AgentMCPServer] {
+    /// AgentDesk's files server joins them when folder access is on, or to
+    /// serve Claude Code's approval tool for a project folder (`approvals`).
+    private func modelMCPServers(sessionID: UUID, approvals folder: String? = nil) -> [AgentMCPServer] {
         let url = dataRoot.appendingPathComponent("mcp-servers.json")
         let configs = (try? Data(contentsOf: url)).flatMap { try? JSONDecoder().decode([MCPServerConfiguration].self, from: $0) } ?? []
         var servers = AgentMCPServer.forModel(configs)
-        if configuration.folderAccess, let files = folderAccess.server(for: sessionID, dataRoot: dataRoot) { servers.append(files) }
+        if configuration.folderAccess || folder != nil,
+           let files = folderAccess.server(for: sessionID, dataRoot: dataRoot, files: configuration.folderAccess, approvals: folder) { servers.append(files) }
         return servers
     }
 
@@ -173,8 +178,9 @@ final class AppModel: ObservableObject {
     /// `fork` makes a not-yet-started session fork natively from its parent.
     /// Returns whether the turn started.
     @discardableResult
-    /// `project` is the board's folder: once trusted, the provider may write and run commands there.
-    func send(_ text: String, to id: UUID, context: CanvasPromptContext = .init(), project: CanvasProject? = nil) -> Bool {
+    /// `project` is the board's folder: once trusted, the provider works there
+    /// at the board's permission level, or the node's lower `nodeLevel`.
+    func send(_ text: String, to id: UUID, context: CanvasPromptContext = .init(), project: CanvasProject? = nil, nodeLevel: PermissionLevel? = nil) -> Bool {
         guard storageReadable,
               let index = sessions.firstIndex(where: { $0.id == id }), !runningSessionIDs.contains(id) else { return false }
         guard !attachmentDrafts.importing.contains(id) else { return false }
@@ -199,7 +205,7 @@ final class AppModel: ObservableObject {
         do { try AttachmentStore.validateForTextPrompt(attachments) }
         catch { errorMessage = error.localizedDescription; return false }
         if attachments.contains(where: \.isImage), provider == .grok || provider == .gemini {
-            errorMessage = "当前 Cursor 连接暂不支持图片输入。请选择 Claude 或 ChatGPT，或移除图片后发送文档文字。"
+            errorMessage = "当前 Cursor 连接暂不支持图片输入。请选择 Claude Code 或 Codex，或移除图片后发送文档文字。"
             return false
         }
         // Source-node images were already routed and capped by CanvasContextBuilder (none for Cursor).
@@ -213,9 +219,14 @@ final class AppModel: ObservableObject {
         sessions[index].messages.append(ChatMessage(id: assistantID, role: .assistant, text: "", state: .streaming))
         sessions[index].updatedAt = Date()
         let session = sessions[index]
-        let request = AgentRequest(localSessionID: id, remoteSessionID: session.remoteSessionID, prompt: input, workingDirectory: URL(fileURLWithPath: session.workingDirectory), modelID: session.modelID, executableURL: executable, reasoningEffort: session.reasoningEffort, images: images, forkFrom: session.remoteSessionID == nil ? context.fork : nil, mcpServers: modelMCPServers(sessionID: id),
-                                   projectAccess: project?.isTrusted == true && project?.path == session.workingDirectory,
-                                   userFolder: !URL(fileURLWithPath: session.workingDirectory).path.hasPrefix(dataRoot.path + "/"))
+        let mode = HarnessMode.resolve(project: project, nodeLevel: nodeLevel, workingDirectory: session.workingDirectory)
+        let level = mode.level ?? .auto
+        // Claude Code asks through the files helper; Codex asks in process.
+        let approvalFolder = provider == .claude && mode != .chat && level != .auto ? session.workingDirectory : nil
+        let request = AgentRequest(localSessionID: id, remoteSessionID: session.remoteSessionID, prompt: input, workingDirectory: URL(fileURLWithPath: session.workingDirectory), modelID: session.modelID, executableURL: executable, reasoningEffort: session.reasoningEffort, images: images, forkFrom: session.remoteSessionID == nil ? context.fork : nil, mcpServers: modelMCPServers(sessionID: id, approvals: approvalFolder),
+                                   projectAccess: mode != .chat,
+                                   userFolder: !URL(fileURLWithPath: session.workingDirectory).path.hasPrefix(dataRoot.path + "/"),
+                                   permissionLevel: level, approver: approvals.approver)
         let backend: any AgentBackend
         switch provider {
         case .claude: backend = ClaudeBackend()
@@ -265,6 +276,7 @@ final class AppModel: ObservableObject {
                     }
                 }
             }
+            self.approvals.cancel(session: id)
             self.runningSessionIDs.remove(id)
             self.activeStatus.removeValue(forKey: id)
             self.tasks.removeValue(forKey: id)
@@ -276,6 +288,7 @@ final class AppModel: ObservableObject {
 
     func stop(sessionID: UUID) {
         tasks[sessionID]?.cancel()
+        approvals.cancel(session: sessionID)
         if let i = sessions.firstIndex(where: { $0.id == sessionID }) {
             for j in sessions[i].messages.indices where sessions[i].messages[j].state == .streaming {
                 sessions[i].messages[j].state = .cancelled

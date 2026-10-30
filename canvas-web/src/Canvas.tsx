@@ -12,7 +12,7 @@ import { CanvasSearch } from './CanvasSearch'
 import { latestReadable } from './interactions'
 import { SourceNode, type SourceFlowNode } from './SourceNode'
 import { Dropdown } from './Controls'
-import { ProviderMark, providerColor, providerName, providers } from './providers'
+import { ProviderMark, providerAccount, providerColor, providerName, providers } from './providers'
 import type { AppState, MergeTemplate, Provider, SearchHit } from './types'
 
 const templates: { id: MergeTemplate; label: string; hint: string }[] = [
@@ -98,7 +98,7 @@ export function Canvas({ state, selectedNodeID, onSelect, expanded, onExpand, on
           data: {
             summary: state.summaries[n.sessionID], inherited: Boolean(n.inherited), nativeFork: n.inherited?.mode === 'native',
             merge: n.merge, stale: n.stale, downstream: n.downstream, chainCurrent: runningChain?.currentNodeID === n.id,
-            picked: picked.includes(n.id), expanded: expanded.includes(n.id),
+            picked: picked.includes(n.id), expanded: expanded.includes(n.id), mode: n.mode,
             reading: latestReadable(state.details[n.sessionID]?.messages),
             onExpand: () => actions.current.onExpand(n.id), onFollowUp: () => actions.current.onFollowUp(n.id),
             onBranch: () => { const messageID = state.summaries[n.sessionID]?.latestReplyID; if (messageID) send({ type: 'node.branch', boardID: board.id, nodeID: n.id, messageID }) },
@@ -368,7 +368,7 @@ export function Canvas({ state, selectedNodeID, onSelect, expanded, onExpand, on
           <div className="menu-label">{menu.connectFrom ? '新建下游节点（连数据线）' : '新建节点'}</div>
           {providers.map(p => (
             <button key={p} className="menu-item" onClick={() => create(p)}>
-              <ProviderMark provider={p} size={16} />{providerName[p]}
+              <ProviderMark provider={p} size={16} />{providerName[p]}<span className="menu-detail">{providerAccount[p]}</span>
             </button>
           ))}
           {!menu.connectFrom && (

@@ -203,7 +203,7 @@ public final class CodexBackend: AgentBackend, @unchecked Sendable {
         let disabledMCPNames = try await Self.discoverConfiguredMCPNames(executableURL: executableURL, directory: request.workingDirectory)
         try Self.ensureMCPNamesCanBeDisabled(disabledMCPNames)
         let mcpServers = Self.codexMCPServers(request.mcpServers, avoiding: disabledMCPNames)
-        let process = processFactory(executableURL, try Self.appServerArguments(disabling: disabledMCPNames, providing: mcpServers, project: request.projectAccess), request.workingDirectory, environment)
+        let process = processFactory(executableURL, try Self.appServerArguments(disabling: disabledMCPNames, providing: mcpServers, project: request.projectAccess, level: request.permissionLevel), request.workingDirectory, environment)
         try process.start()
         defer { process.terminate() }
 
@@ -216,6 +216,9 @@ public final class CodexBackend: AgentBackend, @unchecked Sendable {
         var modelModalities: [String: [String]] = [:]
         var catalogDefaultModelID: String?
         var selectedReasoningEffort: String?
+        let policy = Self.policy(project: request.projectAccess, level: request.permissionLevel, cwd: request.workingDirectory.path)
+        // Patches by item ID, shown with a file-change approval.
+        var fileChanges: [String: [[String: Any]]] = [:]
 
         func nextID() -> Int { requestID += 1; return requestID }
         func send(_ method: String, params: [String: Any], step: RPCStep? = nil) throws -> String {
@@ -250,12 +253,23 @@ public final class CodexBackend: AgentBackend, @unchecked Sendable {
                 }
 
                 if let method = object["method"] as? String, object["id"] != nil {
+                    let params = object["params"] as? [String: Any] ?? [:]
+                    // Below the automatic level the user answers command and
+                    // file-change approvals; the turn waits meanwhile.
+                    if request.projectAccess, request.permissionLevel != .auto,
+                       let approval = Self.approvalRequest(method: method, params: params, fileChanges: fileChanges, sessionID: request.localSessionID) {
+                        let decision = await request.approver?(approval) ?? .deny
+                        try Task.checkCancellation()
+                        try process.writeJSON(Self.approvalResponse(id: object["id"]!, decision: decision))
+                        continue
+                    }
                     try answerServerRequest(method: method, id: object["id"]!, params: object["params"] as? [String: Any] ?? [:],
                                             allowedMCPServers: Set(mcpServers.map(\.name)), project: request.projectAccess, process: process)
                     continue
                 }
 
                 if let method = object["method"] as? String {
+                    if let params = object["params"] as? [String: Any] { Self.recordFileChanges(method: method, params: params, into: &fileChanges) }
                     try handleNotification(method: method, params: object["params"] as? [String: Any] ?? [:], threadID: &threadID, turnCompleted: &turnCompleted, continuation: continuation)
                     if turnCompleted { return }
                     continue
@@ -323,14 +337,13 @@ public final class CodexBackend: AgentBackend, @unchecked Sendable {
                     }
                     // A trusted project keeps Codex's own instructions.
                     let instructions: String? = request.projectAccess ? nil : Self.baseInstructions(mcpServers: mcpServers)
-                    let sandboxMode = request.projectAccess ? "workspace-write" : "read-only"
+                    let sandboxMode = policy.sandboxMode
                     if let existing = request.remoteSessionID, !existing.isEmpty {
                         var params: [String: Any] = [
                             "threadId": existing,
                             "cwd": request.workingDirectory.path,
-                            "approvalPolicy": "never",
                             "sandbox": sandboxMode
-                        ]
+                        ].merging(policy.thread) { $1 }
                         // Restated on resume: the thread keeps what it
                         // started with, and the opened servers can change.
                         if let instructions { params["baseInstructions"] = instructions }
@@ -342,10 +355,9 @@ public final class CodexBackend: AgentBackend, @unchecked Sendable {
                         var params: [String: Any] = [
                             "threadId": fork.remoteSessionID,
                             "cwd": request.workingDirectory.path,
-                            "approvalPolicy": "never",
                             "sandbox": sandboxMode,
                             "excludeTurns": true
-                        ]
+                        ].merging(policy.thread) { $1 }
                         if let instructions { params["baseInstructions"] = instructions }
                         if let turn = fork.throughTurnID { params["lastTurnId"] = turn }
                         if !request.modelID.isEmpty { params["model"] = request.modelID }
@@ -353,9 +365,8 @@ public final class CodexBackend: AgentBackend, @unchecked Sendable {
                     } else {
                         var params: [String: Any] = [
                             "cwd": request.workingDirectory.path,
-                            "approvalPolicy": "never",
                             "sandbox": sandboxMode
-                        ]
+                        ].merging(policy.thread) { $1 }
                         if let instructions { params["baseInstructions"] = instructions }
                         if !request.modelID.isEmpty { params["model"] = request.modelID }
                         _ = try send("thread/start", params: params, step: .thread)
@@ -375,11 +386,8 @@ public final class CodexBackend: AgentBackend, @unchecked Sendable {
                         "threadId": threadID,
                         "input": imageInput,
                         "cwd": request.workingDirectory.path,
-                        "approvalPolicy": "never",
-                        "sandboxPolicy": request.projectAccess
-                            ? ["type": "workspaceWrite", "writableRoots": [request.workingDirectory.path], "networkAccess": true] as [String: Any]
-                            : ["type": "readOnly", "networkAccess": false]
-                    ]
+                        "sandboxPolicy": policy.sandboxPolicy
+                    ].merging(policy.thread) { $1 }
                     if !request.modelID.isEmpty { params["model"] = request.modelID }
                     // App-server documents `effort` as a per-turn override.
                     // Preserve the exact selected value so unsupported values
@@ -473,17 +481,18 @@ public final class CodexBackend: AgentBackend, @unchecked Sendable {
         }
     }
 
-    /// In a trusted project folder (`project`) the shell stays on and the
-    /// sandbox lets the model write the workspace and use the network.
-    static func appServerArguments(disabling names: [String] = [], providing servers: [AgentMCPServer] = [], project: Bool = false) throws -> [String] {
+    /// In a trusted project folder (`project`) the shell stays on. At the
+    /// automatic level the sandbox lets the model write the workspace and use
+    /// the network without asking; lower levels ask (see `policy`).
+    static func appServerArguments(disabling names: [String] = [], providing servers: [AgentMCPServer] = [], project: Bool = false, level: PermissionLevel = .auto) throws -> [String] {
         var args = ["app-server"]
         let shell = project ? [] : [
             "features.shell_tool=false",
             "features.unified_exec=false",
             "features.unified_exec_tty=false"]
-        let sandbox = project
-            ? ["sandbox_mode=\"workspace-write\"", "sandbox_workspace_write.network_access=true"]
-            : ["sandbox_mode=\"read-only\""]
+        let policy = Self.policy(project: project, level: level, cwd: "")
+        let sandbox = ["sandbox_mode=\"\(policy.sandboxMode)\""]
+            + (policy.sandboxMode == "workspace-write" ? ["sandbox_workspace_write.network_access=\(level == .auto)"] : [])
         let overrides = ["model_provider=\"openai\""] + shell + [
             // Even the advertised ultra effort must remain a single member
             // turn; provider-side delegation must not bypass the room budget.
@@ -503,7 +512,7 @@ public final class CodexBackend: AgentBackend, @unchecked Sendable {
             // into an isolated conversation, and its consolidation thread
             // runs in the same app-server (it was seen stalling turns).
             "features.memories=false",
-            "approval_policy=\"never\""
+            "approval_policy=\"\(policy.approval)\""
         ] + sandbox
         for override in overrides { args.append(contentsOf: ["-c", override]) }
         for name in names {
@@ -541,6 +550,79 @@ public final class CodexBackend: AgentBackend, @unchecked Sendable {
         for name in names where name.range(of: "^[A-Za-z0-9_-]+$", options: .regularExpression) == nil {
             throw AgentError.unavailable("Codex MCP server 名称无法安全转换为临时禁用配置：\(SafeText.redact(name))")
         }
+    }
+
+    struct Policy {
+        /// `approvalPolicy` (AskForApproval in the app-server schema).
+        let approval: String
+        let sandboxMode: String
+        let sandboxPolicy: [String: Any]
+        /// Restated on thread/start, resume, fork and turn/start.
+        var thread: [String: Any] {
+            approval == "never" ? ["approvalPolicy": approval] : ["approvalPolicy": approval, "approvalsReviewer": "user"]
+        }
+    }
+
+    /// Chat: read-only and never asked (nothing to ask; the shell is off).
+    /// 自动: workspace-write with network, never asks. 询问: workspace-write
+    /// without network, "untrusted" (everything but Codex's known read-only
+    /// commands asks, and so do patches). 只读: the same in a read-only
+    /// sandbox. Values checked against `codex app-server generate-json-schema`
+    /// (codex-cli 0.165): untrusted | on-request | never.
+    static func policy(project: Bool, level: PermissionLevel, cwd: String) -> Policy {
+        guard project else { return Policy(approval: "never", sandboxMode: "read-only", sandboxPolicy: ["type": "readOnly", "networkAccess": false]) }
+        switch level {
+        case .auto:
+            return Policy(approval: "never", sandboxMode: "workspace-write", sandboxPolicy: ["type": "workspaceWrite", "writableRoots": [cwd], "networkAccess": true])
+        case .ask:
+            return Policy(approval: "untrusted", sandboxMode: "workspace-write", sandboxPolicy: ["type": "workspaceWrite", "writableRoots": [cwd], "networkAccess": false])
+        case .readOnly:
+            return Policy(approval: "untrusted", sandboxMode: "read-only", sandboxPolicy: ["type": "readOnly", "networkAccess": false])
+        }
+    }
+
+    /// Patches arrive with the file-change item before its approval request.
+    static func recordFileChanges(method: String, params: [String: Any], into changes: inout [String: [[String: Any]]]) {
+        switch method {
+        case "item/started", "item/completed":
+            guard let item = params["item"] as? [String: Any], item["type"] as? String == "fileChange", let id = item["id"] as? String else { return }
+            if method == "item/completed" { changes[id] = nil } else { changes[id] = item["changes"] as? [[String: Any]] ?? [] }
+        case "item/fileChange/patchUpdated":
+            if let id = params["itemId"] as? String { changes[id] = params["changes"] as? [[String: Any]] ?? [] }
+        default: return
+        }
+    }
+
+    /// The card for a command or file-change approval; nil for other requests.
+    static func approvalRequest(method: String, params: [String: Any], fileChanges: [String: [[String: Any]]], sessionID: UUID) -> ApprovalRequest? {
+        let reason = params["reason"] as? String
+        switch method {
+        case "item/commandExecution/requestApproval":
+            let network = params["networkApprovalContext"] as? [String: Any]
+            let stdin = params["kind"] as? String == "writeStdin"
+            let title = network.map { "联网：\($0["host"] as? String ?? "未知主机")" } ?? (stdin ? "向运行中的命令输入" : "运行命令")
+            return ApprovalRequest(sessionID: sessionID, kind: network == nil ? .command : .network, title: title,
+                                   command: params["command"] as? String, cwd: params["cwd"] as? String, reason: reason, sessionScope: "同一条命令")
+        case "item/fileChange/requestApproval":
+            let changes = (params["itemId"] as? String).flatMap { fileChanges[$0] } ?? []
+            let files = changes.compactMap { $0["path"] as? String }
+            let diff = changes.map { change -> String in
+                let kind = (change["kind"] as? [String: Any])?["type"] as? String ?? "update"
+                let label = ["add": "新建", "delete": "删除"][kind] ?? "修改"
+                return "--- \(label) \(change["path"] as? String ?? "")\n\(change["diff"] as? String ?? "")"
+            }.joined(separator: "\n")
+            return ApprovalRequest(sessionID: sessionID, kind: .fileChange, title: files.count > 1 ? "修改 \(files.count) 个文件" : "修改文件",
+                                   cwd: params["grantRoot"] as? String, files: files, diff: ApprovalRequest.clipped(diff), reason: reason, sessionScope: "这些文件")
+        default:
+            return nil
+        }
+    }
+
+    /// accept / acceptForSession / decline, as both approval responses spell them.
+    static func approvalResponse(id: Any, decision: FolderAccessDecision) -> [String: Any] {
+        let value: String
+        switch decision { case .once: value = "accept"; case .conversation: value = "acceptForSession"; case .deny: value = "decline" }
+        return ["id": id, "result": ["decision": value]]
     }
 
     private func handleNotification(

@@ -46,9 +46,9 @@ enum ProjectDialogs {
         alert.informativeText = """
         \(abbreviated(project.path))
 
-        信任后，这个画布里所有对话的 Claude、ChatGPT、Grok、Gemini 都可以在这个文件夹里新建、修改、删除文件，并运行命令（可以联网），不再逐个询问。只信任你自己的项目。
+        信任后，这个画布里的对话（Claude Code、Codex、Cursor）都在这个文件夹里工作，默认是「询问」档：读文件不问；运行命令、联网和改文件前会先在面板里问你（Claude Code 在项目里改文件不问；Cursor 不能逐条确认，这一档不能运行命令）。只信任你自己的项目。
 
-        不信任时只能聊天；以后可以在侧栏里改。
+        以后可以在侧栏里改成「只读」或「自动」（自动：改文件、运行命令、联网都不再询问）。不信任时只能聊天。
         """
         alert.alertStyle = .warning
         alert.addButton(withTitle: "信任这个文件夹")

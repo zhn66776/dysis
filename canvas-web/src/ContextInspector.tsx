@@ -32,6 +32,12 @@ export function ContextInspector({ boardID, nodeID, draft, onClose }: { boardID:
       }
     }}>
       <header><div><strong>本轮上下文预览</strong><div className="sub">本地读取 · 不调用模型</div></div><button className="icon-btn" aria-label="关闭上下文预览" onClick={onClose}>✕</button></header>
+      {preview?.harness && preview.harness.length > 0 && (
+        <section className="harness-settings" aria-label="本轮的 harness 设置">
+          <div className="harness-title">本轮的 harness 设置 <span className="sub">只读</span></div>
+          {preview.harness.map(line => <div key={line} className="harness-line">{line}</div>)}
+        </section>
+      )}
       <div className="context-notes">{preview?.notes.map(n => <p key={n}>{n}</p>)}</div>
       <pre className="context-input">{preview?.text ?? '正在读取本轮输入…'}</pre>
       <footer><span className="sub">文字输入包含文档提取内容；原生会话历史与图片另行传入。</span><button className="btn" onClick={refresh}>刷新预览</button></footer>

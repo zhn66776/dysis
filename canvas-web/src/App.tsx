@@ -5,11 +5,12 @@ import { Canvas } from './Canvas'
 import { ChatPanel } from './ChatPanel'
 import { ConfirmDialog } from './ConfirmDialog'
 import { applyChrome } from './chrome'
+import { approvalsFor, enqueueApproval, resolveApproval } from './harness'
 import { Sidebar } from './Sidebar'
 import { SourcePanel } from './SourcePanel'
 import { toggleExpanded, watchedSessions } from './interactions'
 import { applyState, enqueueConfirm, initialState, resolveConfirm } from './store'
-import type { AppState, ConfirmShow, StatePayload } from './types'
+import type { AppState, ApprovalShow, ConfirmShow, StatePayload } from './types'
 
 export function App() {
   const [state, dispatch] = useReducer((s: AppState, p: StatePayload) => applyState(s, p), initialState)
@@ -20,12 +21,15 @@ export function App() {
   const [messageFocus, setMessageFocus] = useState<{nodeID: string; messageID?: string; request: number} | null>(null)
   const [collapsed, setCollapsed] = useState(false)
   const [confirms, setConfirms] = useState<ConfirmShow[]>([])
+  const [approvals, setApprovals] = useState<ApprovalShow[]>([])
 
   useEffect(() => {
     const off = subscribe(p => {
       if (p.type === 'state') dispatch(p)
       else if (p.type === 'composer.insert') setDrafts(d => ({ ...d, [p.sessionID]: (d[p.sessionID] ? d[p.sessionID] + '\n\n' : '') + p.text }))
       else if (p.type === 'confirm.show') setConfirms(q => enqueueConfirm(q, p))
+      else if (p.type === 'approval.show') setApprovals(q => enqueueApproval(q, p))
+      else if (p.type === 'approval.hide') setApprovals(q => resolveApproval(q, p.id))
       else if (p.type === 'chrome') applyChrome(p)
     })
     send({ type: 'ready' })
@@ -92,6 +96,8 @@ export function App() {
           composerFocus={composerFocus}
           messageFocus={messageFocus?.nodeID === node.id ? messageFocus : null}
           draft={drafts[node.sessionID] ?? ''}
+          approvals={approvalsFor(approvals, node.sessionID)}
+          onApprovalAnswered={id => setApprovals(q => resolveApproval(q, id))}
           onDraft={t => setDrafts(d => ({ ...d, [node.sessionID]: t }))}
           onClose={() => setSelectedNodeID(null)}
         />

@@ -74,7 +74,7 @@ final class PlazaModel: ObservableObject {
         do { try AttachmentStore.validateForTextPrompt(attachments) }
         catch { errorMessage = error.localizedDescription; return false }
         if attachments.contains(where: \.isImage), let unsupported = selected.first(where: { $0.provider == .grok || $0.provider == .gemini }) {
-            errorMessage = "\(unsupported.name) 当前通过 Cursor 连接，暂不支持图片输入。请仅点选 Claude/ChatGPT 成员，或移除图片。"
+            errorMessage = "\(unsupported.name) 当前通过 Cursor 连接，暂不支持图片输入。请仅点选 Claude Code / Codex 成员，或移除图片。"
             return false
         }
         for member in selected {

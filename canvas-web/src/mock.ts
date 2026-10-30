@@ -2,7 +2,7 @@
 // Replies are canned local text, clearly labelled; nothing leaves the page.
 import { previewLayout } from './organize'
 import { searchExcerpt } from './interactions'
-import type { Incoming, BoardPayload, Command, MessagePayload, NodePayload, Provider, SessionSummary, SourceFile, SourcePayload, StatePayload } from './types'
+import type { ApprovalShow, Incoming, BoardPayload, BoardProject, Command, MessagePayload, NodePayload, PermissionLevel, Provider, SessionSummary, SourceFile, SourcePayload, StatePayload } from './types'
 
 interface MockSession { id: string; title: string; provider: Provider; modelID: string; started: boolean; messages: MessagePayload[] }
 
@@ -47,9 +47,11 @@ export function createMockHost(emit: (p: Incoming) => void) {
   const b = addSession('codex', '写定价说明')
   const c = addSession('grok', 'Grok 竞品速览')
   const board: BoardPayload = { id: uid(), title: '示例画布', nodes: [], edges: [] }
-  const na: NodePayload = { id: uid(), sessionID: a.id, x: 80, y: 120, stale: false, downstream: 0 }
-  const nb: NodePayload = { id: uid(), sessionID: b.id, x: 440, y: 120, stale: false, downstream: 0 }
-  const nc: NodePayload = { id: uid(), sessionID: c.id, x: 440, y: 340, stale: false, downstream: 0 }
+  // The sample board is a trusted project at 询问, so sending shows an approval card.
+  const projects = new Map<string, BoardProject>([[board.id, { path: '~/AgentDesk Projects/示例画布', name: '示例画布', trusted: true, missing: false, level: 'ask' }]])
+  const na: NodePayload = { id: uid(), sessionID: a.id, x: 80, y: 120, stale: false, downstream: 0, mode: 'ask' }
+  const nb: NodePayload = { id: uid(), sessionID: b.id, x: 440, y: 120, stale: false, downstream: 0, mode: 'ask' }
+  const nc: NodePayload = { id: uid(), sessionID: c.id, x: 440, y: 340, stale: false, downstream: 0, mode: 'ask' }
   board.nodes.push(na, nb, nc)
   board.edges.push({ id: uid(), kind: 'data', source: na.id, target: nb.id, pending: true })
 
@@ -77,15 +79,26 @@ export function createMockHost(emit: (p: Incoming) => void) {
     for (const e of boardNow().edges) if (e.source === n.id) e.pending = true
   }
 
+  const approvals = new Map<string, { show: ApprovalShow; resume(): void }>()
+  const waiting = (sessionID: string) => [...approvals.values()].some(a => a.show.sessionID === sessionID)
+  const levelOf = (b: BoardPayload, n: NodePayload): PermissionLevel | null => {
+    const level = projects.get(b.id)?.level
+    if (!level) return null
+    const order: PermissionLevel[] = ['readOnly', 'ask', 'auto']
+    return n.nodeLevel && order.indexOf(n.nodeLevel) < order.indexOf(level) ? n.nodeLevel : level
+  }
+  const refreshModes = (b: BoardPayload) => { for (const n of b.nodes) if (!n.source) n.mode = levelOf(b, n) ?? 'chat' }
+
   const summary = (s: MockSession): SessionSummary => {
     const last = [...s.messages].reverse().find(m => m.role === 'assistant')
-    const state = running.has(s.id) ? 'running' : last ? (last.state === 'streaming' ? 'running' : last.state) : 'empty'
+    const state = running.has(s.id) ? (waiting(s.id) ? 'waiting' : 'running') : last ? (last.state === 'streaming' ? 'running' : last.state) : 'empty'
     return { id: s.id, title: s.title, provider: s.provider, modelID: s.modelID, modelKey: s.modelID, effort: efforts.get(s.id), effortChoices: ['low', 'medium', 'high', 'xhigh', 'max'], remoteShort: s.started ? s.id.slice(0, 8) : undefined, state, latestReplyID: [...s.messages].reverse().find(m => m.role === 'assistant' && m.state === 'complete' && m.text)?.id, preview: (last?.text ?? s.messages.at(-1)?.text ?? '').slice(0, 140), messageCount: s.messages.length, updatedAt: Date.now(), contextUsed: s.started ? 18_400 : undefined, contextWindow: s.started ? 200_000 : undefined }
   }
   const boardNow = () => boards.find(x => x.id === current)!
-  const push = (extra: Partial<StatePayload> = {}) => emit({
+  const push = (extra: Partial<StatePayload> = {}) => { boards.forEach(refreshModes); emit({
     type: 'state', reset: true, running: [...running.keys()], error: '', chain: { total: 0, index: 0 },
-    boards: boards.map(x => ({ id: x.id, title: x.title, nodeCount: x.nodes.length })),
+    boards: boards.map(x => ({ id: x.id, title: x.title, nodeCount: x.nodes.length, project: projects.get(x.id) ?? null,
+      waiting: x.nodes.filter(n => waiting(n.sessionID)).length })),
     board: { ...structuredClone(boardNow()), history: { undoLabel: history(current).past.at(-1)?.label, redoLabel: history(current).future.at(-1)?.label } },
     summaries: [...sessions.values()].map(summary),
     details: [...watched].filter(id => sessions.has(id)).map(id => ({ id, messages: structuredClone(sessions.get(id)!.messages) })),
@@ -96,7 +109,7 @@ export function createMockHost(emit: (p: Incoming) => void) {
     quotas: { claude: { windows: [{ label: '5 小时', usedPercent: 38, resetsAt: Date.now() + 2.5 * 3600e3 }, { label: '每周', usedPercent: 61 }], updatedAt: Date.now() } },
     drafts: [...watched].map(id => ({ sessionID: id, files: drafts.get(id) ?? [], importing: false })),
     ...extra,
-  })
+  }) }
   const nodeOf = (boardID: string, nodeID: string) => boards.find(x => x.id === boardID)?.nodes.find(n => n.id === nodeID)
 
   return (c: Command) => {
@@ -203,7 +216,10 @@ export function createMockHost(emit: (p: Incoming) => void) {
           const reply = e.sourceMessageID ? s.messages.find(m => m.id === e.sourceMessageID) : [...s.messages].reverse().find(m => m.role === 'assistant' && m.state === 'complete')
           return reply ? `--- 来自「${s.title}」---\n${reply.text}` : ''
         }).filter(Boolean)
-        emit({ type: 'context.preview', id: c.id, nodeID: c.nodeID, text: [...inputs, '[本轮用户消息]\n' + (c.text || '（在输入框中填写本轮问题）')].join('\n\n'), notes: ['浏览器预览：示例内容，不调用模型。正式应用复用实际发送时的上下文与附件文字组装。'] }); return
+        const provider = sessions.get(node.sessionID)!.provider
+        const harness = [`Harness：${({ claude: 'Claude Code · Claude 订阅（claude -p）', codex: 'Codex · ChatGPT 账号（codex app-server）', grok: 'Cursor · Grok · Cursor 订阅（agent --print）', gemini: 'Cursor · Gemini · Cursor 订阅（agent --print）' } as const)[provider]}`,
+          `模式：${node.mode === 'chat' || !node.mode ? '聊天' : '项目 · ' + ({ readOnly: '只读', ask: '询问', auto: '自动' } as const)[node.mode]}`, '工作目录：~/AgentDesk Projects/示例画布', '规则文件：AGENTS.md（浏览器预览的示例）']
+        emit({ type: 'context.preview', id: c.id, nodeID: c.nodeID, text: [...inputs, '[本轮用户消息]\n' + (c.text || '（在输入框中填写本轮问题）')].join('\n\n'), notes: ['浏览器预览：示例内容，不调用模型。正式应用复用实际发送时的上下文与附件文字组装。'], harness }); return
       }
       case 'node.quote': {
         const parent = nodeOf(c.boardID, c.nodeID)!
@@ -232,14 +248,48 @@ export function createMockHost(emit: (p: Incoming) => void) {
         s.started = true
         const words = '这是浏览器预览里的模拟回复，没有调用任何模型。真正的回复会从官方 CLI 流式返回，并以同样的方式逐段出现在这里。'.split('')
         let i = 0
-        running.set(s.id, window.setInterval(() => {
+        // Below 自动, Codex and Claude Code pause halfway for an approval (Cursor cannot ask).
+        let ask = n.mode === 'ask' || n.mode === 'readOnly' ? (s.provider === 'grok' || s.provider === 'gemini' ? 0 : 1) : 0
+        const tick = () => {
           reply.text += words.slice(i, i + 3).join(''); i += 3
+          if (ask && i >= 18) {
+            ask = 0
+            window.clearInterval(running.get(s.id))
+            const id = uid()
+            const show: ApprovalShow = s.provider === 'claude'
+              ? { type: 'approval.show', id, sessionID: s.id, kind: 'fileChange', title: '修改文件', files: ['~/Documents/定价说明.md'], cwd: '~/AgentDesk Projects/示例画布',
+                  diff: '-月付 49 元\n+月付 59 元，年付打八折', reason: '把新的价格写进说明文档（文件在项目外，所以要问你）', sessionScope: '这个文件', expiresAt: Date.now() + 120e3 }
+              : { type: 'approval.show', id, sessionID: s.id, kind: 'command', title: '运行命令', command: 'npm test -- --run pricing', cwd: '~/AgentDesk Projects/示例画布',
+                  files: [], reason: '运行定价相关的测试，确认改动没有破坏现有逻辑', sessionScope: '同一条命令', expiresAt: Date.now() + 120e3 }
+            approvals.set(id, { show, resume: () => running.set(s.id, window.setInterval(tick, 60)) })
+            emit(show)
+          }
           if (i >= words.length) { reply.state = 'complete'; window.clearInterval(running.get(s.id)); running.delete(s.id) }
           push()
-        }, 60))
+        }
+        running.set(s.id, window.setInterval(tick, 60))
         break
       }
+      case 'approval.answer': {
+        const a = approvals.get(c.id); if (!a) return
+        approvals.delete(c.id)
+        emit({ type: 'approval.hide', id: c.id })
+        if (c.decision === 'deny') { const r = sessions.get(a.show.sessionID)?.messages.at(-1); if (r) r.text += '（你拒绝了这一步，模型会换个方式继续。）' }
+        a.resume(); break
+      }
+      case 'board.setLevel': {
+        const p = projects.get(c.boardID); if (!p) return
+        const apply = () => { p.level = c.level; refreshModes(boards.find(x => x.id === c.boardID)!); push() }
+        if (c.level === 'auto') { confirm(`把「${p.name}」改成「自动」？`, '画布里的对话可以不经询问新建、修改、删除文件，运行命令并联网。只在你自己的项目里这样做。', '改成自动', apply); return }
+        apply(); return
+      }
+      case 'node.setLevel': {
+        const x = boards.find(y => y.id === c.boardID), n = x?.nodes.find(y => y.id === c.nodeID)
+        if (!x || !n) return
+        n.nodeLevel = c.level ?? undefined; refreshModes(x); break
+      }
       case 'chat.stop': {
+        for (const [id, a] of approvals) if (a.show.sessionID === c.sessionID) { approvals.delete(id); emit({ type: 'approval.hide', id }) }
         const t = running.get(c.sessionID); if (t) window.clearInterval(t); running.delete(c.sessionID)
         const last = sessions.get(c.sessionID)?.messages.at(-1); if (last?.state === 'streaming') last.state = 'cancelled'
         break

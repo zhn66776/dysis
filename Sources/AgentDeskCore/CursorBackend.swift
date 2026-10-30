@@ -27,15 +27,17 @@ public struct CursorBackend: AgentBackend, Sendable {
                     // stores the exact discovered model ID (for example
                     // grok-4.7-high or gemini-4-argon-high).
                     let cursorModelID = request.modelID
+                    let level: PermissionLevel? = request.projectAccess ? request.permissionLevel : nil
                     let skipped = try CursorBackend.writeMCPConfig(request.mcpServers, workspace: request.workingDirectory,
-                                                                   userFolder: request.userFolder, project: request.projectAccess)
+                                                                   userFolder: request.userFolder, project: request.projectAccess, level: request.permissionLevel)
                     if !skipped.isEmpty {
                         continuation.yield(.status("项目里已有自己的 .cursor/\(skipped.joined(separator: "、"))，AgentDesk 没有改它；这一轮的 MCP 设置以它为准。"))
                     }
                     for server in request.mcpServers { environment.merge(server.environment) { $1 } }
-                    // A trusted project runs in agent mode: edits and commands
-                    // (with network) without asking, as in a terminal there.
-                    let mode = request.projectAccess ? ["--force", "--sandbox", "disabled"] : ["--mode", "ask", "--sandbox", "enabled"]
+                    let mode = CursorBackend.modeArguments(level: level, rulesWritten: !skipped.contains("cli.json"))
+                    if level == .ask, skipped.contains("cli.json") {
+                        continuation.yield(.status("项目里已有自己的 .cursor/cli.json，AgentDesk 无法限定 Cursor 的权限，这一轮按只读运行。"))
+                    }
                     var arguments = ["--print", "--model", cursorModelID] + mode + [
                         "--trust",
                         "--workspace", request.workingDirectory.path,
@@ -81,7 +83,9 @@ public struct CursorBackend: AgentBackend, Sendable {
                             if let status = parsed.status, !status.isEmpty { continuation.yield(.status(status)) }
                             if parsed.isFailure { throw AgentError.protocolFailure(SafeText.redact(parsed.failureMessage ?? "Cursor CLI 返回失败结果。")) }
                             if request.projectAccess {
-                                if parsed.isToolCallStart, let status = parsed.projectStatus { continuation.yield(.status(status)) }
+                                if parsed.isToolCallStart, level != .auto, parsed.builtInTool == "shell" {
+                                    continuation.yield(.status("Cursor 在「\(request.permissionLevel.label)」档不能运行命令，已拒绝；需要运行命令请改用 Codex 或 Claude Code 节点。"))
+                                } else if parsed.isToolCallStart, let status = parsed.projectStatus { continuation.yield(.status(status)) }
                             } else if let call = parsed.mcpToolCall, CursorBackend.allows(call.server, among: allowedMCP) {
                                 if parsed.isToolCallStart, let tool = call.tool { continuation.yield(.status("正在调用 MCP 工具 \(call.server ?? "MCP") · \(tool)…")) }
                             } else if parsed.hasToolCall, !allowedMCP.isEmpty, !parsed.builtInToolSucceeded {
@@ -126,8 +130,12 @@ public struct CursorBackend: AgentBackend, Sendable {
     /// there before (listed in `.cursor/.agentdesk-managed`) are replaced or
     /// removed; the names of files left alone are returned. A trusted
     /// project (`project`) allows the servers without the deny list.
+    ///
+    /// Cursor's `--print` has no approval callback (agent 2026.10.22: no
+    /// prompt tool, no stdin approvals), so the levels below automatic are
+    /// static `cli.json` rules (`permissionRules`).
     @discardableResult
-    static func writeMCPConfig(_ servers: [AgentMCPServer], workspace: URL, userFolder: Bool = false, project: Bool = false) throws -> [String] {
+    static func writeMCPConfig(_ servers: [AgentMCPServer], workspace: URL, userFolder: Bool = false, project: Bool = false, level: PermissionLevel = .auto) throws -> [String] {
         let directory = workspace.appendingPathComponent(".cursor", isDirectory: true)
         let url = directory.appendingPathComponent("mcp.json")
         let permissions = directory.appendingPathComponent("cli.json")
@@ -143,11 +151,16 @@ public struct CursorBackend: AgentBackend, Sendable {
                 else { try? JSONEncoder().encode(managed.sorted()).write(to: marker, options: .atomic) }
             }
         }
+        let rules = permissionRules(servers: servers, project: project, level: level)
+        func remove(_ file: URL) throws {
+            guard FileManager.default.fileExists(atPath: file.path), mine(file) else { return }
+            try FileManager.default.removeItem(at: file)
+            managed.remove(file.lastPathComponent)
+        }
+        if rules == nil { try remove(permissions) }
         guard !servers.isEmpty else {
-            for file in [url, permissions] where FileManager.default.fileExists(atPath: file.path) && mine(file) {
-                try FileManager.default.removeItem(at: file)
-                managed.remove(file.lastPathComponent)
-            }
+            try remove(url)
+            if let rules, mine(permissions) { try writeRules(rules, to: permissions); managed.insert(permissions.lastPathComponent) }
             return skipped
         }
         var map: [String: Any] = [:]
@@ -162,12 +175,40 @@ public struct CursorBackend: AgentBackend, Sendable {
             try JSONSerialization.data(withJSONObject: ["mcpServers": map], options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]).write(to: url, options: .atomic)
             managed.insert(url.lastPathComponent)
         }
-        if mine(permissions) {
-            let allow = servers.map { "Mcp(\($0.name):*)" }
-            try JSONSerialization.data(withJSONObject: ["permissions": ["allow": allow, "deny": project ? [] : deniedBuiltInTools]], options: [.prettyPrinted, .sortedKeys]).write(to: permissions, options: .atomic)
+        if let rules, mine(permissions) {
+            try writeRules(rules, to: permissions)
             managed.insert(permissions.lastPathComponent)
         }
         return skipped
+    }
+
+    private static func writeRules(_ rules: (allow: [String], deny: [String]), to file: URL) throws {
+        try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try JSONSerialization.data(withJSONObject: ["permissions": ["allow": rules.allow, "deny": rules.deny]], options: [.prettyPrinted, .sortedKeys]).write(to: file, options: .atomic)
+    }
+
+    /// `.cursor/cli.json` for one send; nil when none is needed. Chat allows
+    /// only the opened servers; a project at 询问 reads and writes the folder
+    /// but never runs commands, at 只读 it only reads, at 自动 nothing is denied.
+    static func permissionRules(servers: [AgentMCPServer], project: Bool, level: PermissionLevel) -> (allow: [String], deny: [String])? {
+        let mcp = servers.map { "Mcp(\($0.name):*)" }
+        guard project else { return servers.isEmpty ? nil : (mcp, deniedBuiltInTools) }
+        switch level {
+        case .auto: return servers.isEmpty ? nil : (mcp, [])
+        case .ask: return (["Read(**)", "Write(**)"] + mcp, ["Shell(*)"])
+        case .readOnly: return (["Read(**)"] + mcp, ["Write(**)", "Shell(*)"])
+        }
+    }
+
+    /// Chat and 只读 run in ask mode; 询问 in agent mode with the sandbox on
+    /// and the rules above (ask mode when they could not be written); 自动
+    /// with --force, edits and commands (with network) as in a terminal.
+    static func modeArguments(level: PermissionLevel?, rulesWritten: Bool = true) -> [String] {
+        switch level {
+        case .auto?: return ["--force", "--sandbox", "disabled"]
+        case .ask? where rulesWritten: return ["--sandbox", "enabled"]
+        default: return ["--mode", "ask", "--sandbox", "enabled"]
+        }
     }
 
     /// Cursor has no system prompt flag; a short note ahead of the user's

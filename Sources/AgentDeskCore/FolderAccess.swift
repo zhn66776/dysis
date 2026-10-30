@@ -13,9 +13,22 @@ public enum FolderAccessPolicy {
     public static let modelNote = "To read the user's local files, use the agentdesk_files tools; AgentDesk asks the user before each new folder. If the user declines, do not retry another path for the same data."
 
     /// The server for one conversation, or nil when the helper is not installed.
-    public static func server(helper: URL, dataRoot: URL, sessionID: UUID, token: String) -> AgentMCPServer? {
+    /// `approvals` adds Claude Code's permission prompt tool (`ClaudeApprovalTool`)
+    /// for a project folder at `cwd`; `files` false leaves out the read tools.
+    public static func server(helper: URL, dataRoot: URL, sessionID: UUID, token: String, files: Bool = true, approvals cwd: String? = nil) -> AgentMCPServer? {
         guard FileManager.default.isExecutableFile(atPath: helper.path) else { return nil }
-        return AgentMCPServer(name: serverName, transport: .stdio(command: helper.path, arguments: ["--data", dataRoot.path, "--session", sessionID.uuidString, "--token", token]))
+        var arguments = ["--data", dataRoot.path, "--session", sessionID.uuidString, "--token", token]
+        if !files { arguments.append("--no-files") }
+        if let cwd { arguments += ["--approvals", cwd] }
+        return AgentMCPServer(name: serverName, transport: .stdio(command: helper.path, arguments: arguments))
+    }
+
+    /// `--permission-prompt-tool` for these servers, when one of them serves it.
+    public static func approvalTool(in servers: [AgentMCPServer]) -> String? {
+        servers.contains { server in
+            guard server.name == serverName, case .stdio(_, let arguments) = server.transport else { return false }
+            return arguments.contains("--approvals")
+        } ? ClaudeApprovalTool.qualifiedName : nil
     }
 
     public static func resolve(_ raw: String, home: URL = FileManager.default.homeDirectoryForCurrentUser) -> URL {
@@ -233,9 +246,14 @@ public final class FolderAccessServer {
     let token: String
     let home: URL
     let timeout: TimeInterval
+    let files: Bool
+    /// The project folder when this server also answers Claude Code's permission prompts.
+    let approvalsFolder: String?
 
-    public init(exchange: FolderAccessExchange, sessionID: UUID, token: String, home: URL = FileManager.default.homeDirectoryForCurrentUser, timeout: TimeInterval = FolderAccessPolicy.approvalTimeout) {
+    public init(exchange: FolderAccessExchange, sessionID: UUID, token: String, home: URL = FileManager.default.homeDirectoryForCurrentUser, timeout: TimeInterval = FolderAccessPolicy.approvalTimeout,
+                files: Bool = true, approvals approvalsFolder: String? = nil) {
         self.exchange = exchange; self.sessionID = sessionID; self.token = token; self.home = home; self.timeout = timeout
+        self.files = files; self.approvalsFolder = approvalsFolder
     }
 
     public static let tools: [[String: Any]] = {
@@ -262,7 +280,7 @@ public final class FolderAccessServer {
             result = ["protocolVersion": params["protocolVersion"] as? String ?? "2025-06-18", "capabilities": ["tools": [:]],
                       "serverInfo": ["name": "agentdesk-files", "version": "1"],
                       "instructions": "用这些工具读取用户电脑上的文件。每个新文件夹都会先征求用户同意；用户拒绝后不要换路径重试。"]
-        case "tools/list": result = ["tools": Self.tools]
+        case "tools/list": result = ["tools": (files ? Self.tools : []) + (approvalsFolder != nil ? [ClaudeApprovalTool.definition] : [])]
         case "tools/call": result = call(params["name"] as? String ?? "", params["arguments"] as? [String: Any] ?? [:])
         case "ping": result = [:]
         default:
@@ -272,7 +290,9 @@ public final class FolderAccessServer {
     }
 
     func call(_ name: String, _ arguments: [String: Any]) -> [String: Any] {
+        if name == ClaudeApprovalTool.name, let folder = approvalsFolder { return approve(arguments, cwd: folder) }
         do {
+            guard files else { throw FolderAccessError.unreadable("没有这个工具：\(name)") }
             let reason = arguments["reason"] as? String
             let text: String
             switch name {
@@ -288,6 +308,24 @@ public final class FolderAccessServer {
         } catch {
             return ["content": [["type": "text", "text": error.localizedDescription]], "isError": true]
         }
+    }
+
+    /// Claude Code's permission prompt: allowed at once when this session
+    /// already allowed the same thing, else asked in the app. Always a
+    /// result, never a tool error: an error would read as a failed prompt.
+    func approve(_ arguments: [String: Any], cwd: String) -> [String: Any] {
+        let tool = arguments["tool_name"] as? String ?? ""
+        let input = arguments["input"] as? [String: Any] ?? [:]
+        let decision: FolderAccessDecision?
+        if exchange.approvalGrants(session: sessionID).contains(ClaudeApprovalTool.grantKey(toolName: tool, input: input)) {
+            decision = .conversation
+        } else {
+            let request = ClaudeApprovalTool.request(toolName: tool, input: input, sessionID: sessionID, token: token, cwd: cwd)
+            if (try? exchange.postApproval(request)) != nil {
+                decision = exchange.waitForApproval(request.id, timeout: timeout)
+            } else { decision = .deny }
+        }
+        return ["content": [["type": "text", "text": ClaudeApprovalTool.answer(decision, input: input)]]]
     }
 
     /// The resolved path when this conversation may read it, asking the app first when needed.
