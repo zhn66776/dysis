@@ -1,13 +1,14 @@
 // Browser-only stand-in for the Swift host, used by `npm run dev`.
 // Replies are canned local text, clearly labelled; nothing leaves the page.
-import type { BoardPayload, Command, ComposerInsert, ConfirmShow, MessagePayload, NodePayload, Provider, SessionSummary, StatePayload } from './types'
+import { searchExcerpt } from './interactions'
+import type { Incoming, BoardPayload, Command, MessagePayload, NodePayload, Provider, SessionSummary, StatePayload } from './types'
 
 interface MockSession { id: string; title: string; provider: Provider; modelID: string; started: boolean; messages: MessagePayload[] }
 
 const models: Record<Provider, string> = { claude: 'sonnet', codex: 'gpt-6.1-sol', grok: 'grok-4.7-medium', gemini: 'gemini-4-argon-medium' }
 const uid = () => crypto.randomUUID()
 
-export function createMockHost(emit: (p: StatePayload | ComposerInsert | ConfirmShow) => void) {
+export function createMockHost(emit: (p: Incoming) => void) {
   const sessions = new Map<string, MockSession>()
   const boards: BoardPayload[] = []
   let current = ''
@@ -42,7 +43,7 @@ export function createMockHost(emit: (p: StatePayload | ComposerInsert | Confirm
   const summary = (s: MockSession): SessionSummary => {
     const last = [...s.messages].reverse().find(m => m.role === 'assistant')
     const state = running.has(s.id) ? 'running' : last ? (last.state === 'streaming' ? 'running' : last.state) : 'empty'
-    return { id: s.id, title: s.title, provider: s.provider, modelID: s.modelID, modelKey: s.modelID, effort: efforts.get(s.id), effortChoices: ['low', 'medium', 'high', 'xhigh', 'max'], remoteShort: s.started ? s.id.slice(0, 8) : undefined, state, preview: (last?.text ?? s.messages.at(-1)?.text ?? '').slice(0, 140), messageCount: s.messages.length, updatedAt: Date.now(), contextUsed: s.started ? 18_400 : undefined, contextWindow: s.started ? 200_000 : undefined }
+    return { id: s.id, title: s.title, provider: s.provider, modelID: s.modelID, modelKey: s.modelID, effort: efforts.get(s.id), effortChoices: ['low', 'medium', 'high', 'xhigh', 'max'], remoteShort: s.started ? s.id.slice(0, 8) : undefined, state, latestReplyID: [...s.messages].reverse().find(m => m.role === 'assistant' && m.state === 'complete' && m.text)?.id, preview: (last?.text ?? s.messages.at(-1)?.text ?? '').slice(0, 140), messageCount: s.messages.length, updatedAt: Date.now(), contextUsed: s.started ? 18_400 : undefined, contextWindow: s.started ? 200_000 : undefined }
   }
   const boardNow = () => boards.find(x => x.id === current)!
   const push = (extra: Partial<StatePayload> = {}) => emit({
@@ -98,9 +99,46 @@ export function createMockHost(emit: (p: StatePayload | ComposerInsert | Confirm
         const parent = nodeOf(c.boardID, c.nodeID)!
         const ps = sessions.get(parent.sessionID)!
         const s = addSession(ps.provider, `分支 · ${ps.title}`)
+        s.modelID = ps.modelID
+        if (efforts.has(ps.id)) efforts.set(s.id, efforts.get(ps.id)!)
         let y = parent.y; while (boardNow().nodes.some(o => Math.abs(o.x - parent.x - 320) < 260 && Math.abs(o.y - y) < 150)) y += 40
         const n: NodePayload = { id: uid(), sessionID: s.id, x: parent.x + 320, y, stale: false, downstream: 0, inherited: { fromNodeID: parent.id, messageCount: ps.messages.findIndex(m => m.id === c.messageID) + 1, mode: (ps.provider === 'claude' || ps.provider === 'codex') ? 'native' as const : 'replay' as const, reason: (ps.provider === 'claude' || ps.provider === 'codex') ? undefined : 'Cursor 不支持原生分叉' } }
         const x = boardNow(); x.nodes.push(n); x.edges.push({ id: uid(), kind: 'inherit', source: parent.id, target: n.id })
+        push({ focusNodeID: n.id }); return
+      }
+      case 'board.search': {
+        const target = boards.find(b => b.id === c.boardID)
+        const query = c.text.trim()
+        const hits = query ? (target?.nodes ?? []).flatMap(n => {
+          const s = sessions.get(n.sessionID)
+          if (!s) return []
+          if (searchExcerpt(s.title, query)) return [{ nodeID: n.id, excerpt: s.title }]
+          const m = [...s.messages].reverse().find(m => searchExcerpt(m.text, query))
+          return m ? [{ nodeID: n.id, messageID: m.id, excerpt: searchExcerpt(m.text, query)! }] : []
+        }) : []
+        emit({ type: 'search.results', id: c.id, boardID: c.boardID, query: c.text, hits }); return
+      }
+      case 'context.preview': {
+        const target = boards.find(b => b.id === c.boardID)!
+        const node = target.nodes.find(n => n.id === c.nodeID)!
+        const inputs = target.edges.filter(e => e.kind === 'data' && e.target === node.id && e.pending).map(e => {
+          const source = target.nodes.find(n => n.id === e.source)!
+          const s = sessions.get(source.sessionID)!
+          const reply = e.sourceMessageID ? s.messages.find(m => m.id === e.sourceMessageID) : [...s.messages].reverse().find(m => m.role === 'assistant' && m.state === 'complete')
+          return reply ? `--- 来自「${s.title}」---\n${reply.text}` : ''
+        }).filter(Boolean)
+        emit({ type: 'context.preview', id: c.id, nodeID: c.nodeID, text: [...inputs, '[本轮用户消息]\n' + (c.text || '（在输入框中填写本轮问题）')].join('\n\n'), notes: ['浏览器预览：示例内容，不调用模型。正式应用复用实际发送时的上下文与附件文字组装。'] }); return
+      }
+      case 'node.quote': {
+        const parent = nodeOf(c.boardID, c.nodeID)!
+        const ps = sessions.get(parent.sessionID)!
+        if (!ps.messages.some(m => m.id === c.messageID && m.state === 'complete' && m.role === 'assistant')) return
+        const s = addSession(ps.provider, `引用 · ${ps.title}`)
+        s.modelID = ps.modelID
+        if (efforts.has(ps.id)) efforts.set(s.id, efforts.get(ps.id)!)
+        const x = boardNow()
+        const n: NodePayload = { id: uid(), sessionID: s.id, x: parent.x + 440, y: parent.y + 200, stale: false, downstream: 0 }
+        x.nodes.push(n); x.edges.push({ id: uid(), kind: 'data', source: parent.id, target: n.id, sourceMessageID: c.messageID, pending: true })
         push({ focusNodeID: n.id }); return
       }
       case 'edge.create': { const x = boardNow(); x.edges.push({ id: uid(), kind: 'data', source: c.source, target: c.target, pending: true }); break }

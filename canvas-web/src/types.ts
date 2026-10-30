@@ -32,6 +32,7 @@ export interface EdgePayload {
   source: string
   target: string
   /** Data edges: the source has a reply the target has not received yet. */
+  sourceMessageID?: string
   pending?: boolean
 }
 
@@ -59,6 +60,7 @@ export interface SessionSummary {
   preview: string
   messageCount: number
   updatedAt: number
+  latestReplyID?: string
   contextUsed?: number
   contextWindow?: number
 }
@@ -112,7 +114,10 @@ export interface ChromeInsets { type: 'chrome'; top: number; left: number }
 
 export interface Region { x: number; y: number; w: number; h: number }
 
-export type Incoming = StatePayload | ComposerInsert | ConfirmShow | ChromeInsets
+export interface SearchHit { nodeID: string; messageID?: string; excerpt: string }
+export interface SearchResults { type: 'search.results'; id: string; boardID: string; query: string; hits: SearchHit[] }
+export interface ContextPreview { type: 'context.preview'; id: string; nodeID: string; text: string; notes: string[] }
+export type Incoming = StatePayload | ComposerInsert | ConfirmShow | ChromeInsets | SearchResults | ContextPreview
 
 export type Command =
   | { type: 'ready' }
@@ -124,10 +129,13 @@ export type Command =
   | { type: 'node.move'; boardID: string; positions: { nodeID: string; x: number; y: number }[] }
   | { type: 'node.delete'; boardID: string; nodeIDs: string[] }
   | { type: 'node.rename'; sessionID: string; title: string }
+  | { type: 'board.search'; boardID: string; text: string; id: string }
+  | { type: 'context.preview'; boardID: string; nodeID: string; text: string; id: string }
+  | { type: 'node.quote'; boardID: string; nodeID: string; messageID: string }
   | { type: 'node.branch'; boardID: string; nodeID: string; messageID: string }
   | { type: 'edge.create'; boardID: string; source: string; target: string }
   | { type: 'edge.delete'; boardID: string; edgeIDs: string[] }
-  | { type: 'session.watch'; sessionIDs: string[] }
+  | { type: 'session.watch'; sessionIDs: string[]; panelSessionID?: string }
   | { type: 'chat.send'; boardID: string; nodeID: string; text: string }
   | { type: 'chat.stop'; sessionID: string }
   | { type: 'viewport.save'; boardID: string; x: number; y: number; zoom: number }

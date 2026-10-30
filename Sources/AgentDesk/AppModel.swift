@@ -66,12 +66,12 @@ final class AppModel: ObservableObject {
     }
 
     @discardableResult
-    func newSession(provider: ProviderID) -> UUID? {
+    func newSession(provider: ProviderID, copyingSettingsFrom source: ChatSession? = nil) -> UUID? {
         guard storageReadable, let store else { return nil }
         do {
             let id = UUID()
             let directory = try store.makeWorkspace(for: id)
-            let session = ChatSession(id: id, provider: provider, modelID: configuration[provider].modelID, workingDirectory: directory.path, reasoningEffort: configuration[provider].reasoningEffort)
+            let session = ChatSession(id: id, provider: provider, modelID: source?.modelID ?? configuration[provider].modelID, workingDirectory: directory.path, reasoningEffort: source == nil ? configuration[provider].reasoningEffort : source?.reasoningEffort)
             sessions.insert(session, at: 0)
             selectedSessionID = id
             persist()
@@ -145,6 +145,12 @@ final class AppModel: ObservableObject {
         send(text, to: id)
     }
 
+    /// Shared by sending and the read-only canvas preview, including document text.
+    func canvasInput(prompt: String, sessionID: UUID, context: CanvasPromptContext) -> String {
+        let withContext = CanvasContextBuilder.compose(userText: prompt, context: context)
+        return AttachmentPromptBuilder.compose(userText: withContext, attachments: attachmentDrafts.files[sessionID, default: []], root: dataRoot, maxCharacters: context.isEmpty ? 48_000 : 56_000)
+    }
+
     /// Starts one provider turn. `context` is the canvas material (replayed
     /// branch history, upstream outputs) placed before the typed text, and its
     /// `fork` makes a not-yet-started session fork natively from its parent.
@@ -179,8 +185,7 @@ final class AppModel: ObservableObject {
             return false
         }
         let images = attachments.filter(\.isImage).map { AgentImageInput(localURL: $0.modelURL(root: dataRoot) ?? $0.storedURL(root: dataRoot), mediaType: $0.modelMediaType ?? $0.mediaType) }
-        let withContext = CanvasContextBuilder.compose(userText: prompt, context: context)
-        let input = AttachmentPromptBuilder.compose(userText: withContext, attachments: attachments, root: dataRoot, maxCharacters: context.isEmpty ? 48_000 : 56_000)
+        let input = canvasInput(prompt: prompt, sessionID: id, context: context)
         if sessions[index].messages.isEmpty {
             sessions[index].title = String(prompt.replacingOccurrences(of: "\n", with: " ").prefix(32))
         }

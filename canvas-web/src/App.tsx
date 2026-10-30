@@ -6,6 +6,7 @@ import { ChatPanel } from './ChatPanel'
 import { ConfirmDialog } from './ConfirmDialog'
 import { applyChrome } from './chrome'
 import { Sidebar } from './Sidebar'
+import { toggleExpanded, watchedSessions } from './interactions'
 import { applyState, enqueueConfirm, initialState, resolveConfirm } from './store'
 import type { AppState, ConfirmShow, StatePayload } from './types'
 
@@ -13,6 +14,9 @@ export function App() {
   const [state, dispatch] = useReducer((s: AppState, p: StatePayload) => applyState(s, p), initialState)
   const [selectedNodeID, setSelectedNodeID] = useState<string | null>(null)
   const [drafts, setDrafts] = useState<Record<string, string>>({})
+  const [expanded, setExpanded] = useState<string[]>([])
+  const [composerFocus, setComposerFocus] = useState(0)
+  const [messageFocus, setMessageFocus] = useState<{nodeID: string; messageID?: string; request: number} | null>(null)
   const [collapsed, setCollapsed] = useState(false)
   const [confirms, setConfirms] = useState<ConfirmShow[]>([])
 
@@ -33,10 +37,11 @@ export function App() {
   const node = state.board?.nodes.find(n => n.id === selectedNodeID)
   useEffect(() => { if (selectedNodeID && state.board && !node) setSelectedNodeID(null) }, [selectedNodeID, state.board, node])
 
-  // Only the open conversation (and the parent it inherits from) gets full messages.
-  const parentSession = node?.inherited ? state.board?.nodes.find(n => n.id === node.inherited!.fromNodeID)?.sessionID : undefined
-  const watchKey = [node?.sessionID, parentSession].filter(Boolean).join(',')
-  useEffect(() => { if (state.ready) send({ type: 'session.watch', sessionIDs: watchKey ? watchKey.split(',') : [] }) }, [watchKey, state.ready])
+  const watchKey = watchedSessions(state, selectedNodeID, expanded).join(',')
+  useEffect(() => {
+    if (state.ready) send({ type: 'session.watch', sessionIDs: watchKey ? watchKey.split(',') : [], panelSessionID: node?.sessionID })
+  }, [watchKey, state.ready, node?.sessionID])
+  const followUp = (id: string) => { setSelectedNodeID(id); setComposerFocus(n => n + 1); setMessageFocus(null) }
 
   // Esc closes the panel unless a field or menu is handling it.
   useEffect(() => {
@@ -70,8 +75,10 @@ export function App() {
         )}
         {!isNative && <div className="preview-badge">浏览器预览 · 模拟数据，不调用模型</div>}
         {state.board && (
-          <ReactFlowProvider>
-            <Canvas state={state} selectedNodeID={selectedNodeID} onSelect={setSelectedNodeID} />
+          <ReactFlowProvider key={state.board.id}>
+            <Canvas state={state} selectedNodeID={selectedNodeID} onSelect={id => { setSelectedNodeID(id); setMessageFocus(null) }}
+              expanded={expanded} onExpand={id => setExpanded(ids => toggleExpanded(ids, id, state.board!.nodes.map(n => n.id)))}
+              onFollowUp={followUp} onLocate={hit => { setSelectedNodeID(hit.nodeID); setMessageFocus({ ...hit, request: Date.now() }) }} />
           </ReactFlowProvider>
         )}
       </main>
@@ -80,6 +87,8 @@ export function App() {
           key={node.id}
           state={state}
           node={node}
+          composerFocus={composerFocus}
+          messageFocus={messageFocus?.nodeID === node.id ? messageFocus : null}
           draft={drafts[node.sessionID] ?? ''}
           onDraft={t => setDrafts(d => ({ ...d, [node.sessionID]: t }))}
           onClose={() => setSelectedNodeID(null)}

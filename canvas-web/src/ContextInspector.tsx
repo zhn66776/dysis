@@ -1,0 +1,40 @@
+import { useEffect, useRef, useState } from 'react'
+import { send, subscribe } from './bridge'
+import type { ContextPreview } from './types'
+
+export function ContextInspector({ boardID, nodeID, draft, onClose }: { boardID: string; nodeID: string; draft: string; onClose(): void }) {
+  const [preview, setPreview] = useState<ContextPreview | null>(null)
+  const request = useRef('')
+  const root = useRef<HTMLDivElement>(null)
+  const refresh = () => {
+    request.current = crypto.randomUUID().toUpperCase()
+    setPreview(null)
+    send({ type: 'context.preview', boardID, nodeID, text: draft, id: request.current })
+  }
+  useEffect(() => {
+    const previous = document.activeElement as HTMLElement | null
+    const off = subscribe(p => { if (p.type === 'context.preview' && p.id === request.current && p.nodeID === nodeID) setPreview(p) })
+    refresh()
+    root.current?.focus()
+    return () => { off(); previous?.focus() }
+  }, [])
+  return <div className="modal-backdrop" onMouseDown={e => { if (e.target === e.currentTarget) onClose() }}>
+    <div ref={root} className="context-modal" role="dialog" aria-modal="true" aria-label="本轮上下文预览" tabIndex={-1} onKeyDown={e => {
+      e.stopPropagation()
+      if (e.key === 'Escape') { e.preventDefault(); onClose() }
+      if (e.key === 'Tab') {
+        const buttons = root.current?.querySelectorAll<HTMLButtonElement>('button')
+        if (buttons?.length) {
+          const first = buttons[0], last = buttons[buttons.length - 1]
+          if (e.shiftKey && (document.activeElement === first || document.activeElement === root.current)) { e.preventDefault(); last.focus() }
+          else if (!e.shiftKey && (document.activeElement === last || document.activeElement === root.current)) { e.preventDefault(); first.focus() }
+        }
+      }
+    }}>
+      <header><div><strong>本轮上下文预览</strong><div className="sub">本地读取 · 不调用模型</div></div><button className="icon-btn" aria-label="关闭上下文预览" onClick={onClose}>✕</button></header>
+      <div className="context-notes">{preview?.notes.map(n => <p key={n}>{n}</p>)}</div>
+      <pre className="context-input">{preview?.text ?? '正在读取本轮输入…'}</pre>
+      <footer><span className="sub">文字输入包含文档提取内容；原生会话历史与图片另行传入。</span><button className="btn" onClick={refresh}>刷新预览</button></footer>
+    </div>
+  </div>
+}

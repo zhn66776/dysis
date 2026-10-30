@@ -6,9 +6,11 @@ import {
 } from '@xyflow/react'
 import { send } from './bridge'
 import { ChatNode, type ChatFlowNode } from './ChatNode'
+import { CanvasSearch } from './CanvasSearch'
+import { latestReadable } from './interactions'
 import { Dropdown } from './Controls'
 import { ProviderMark, providerColor, providerName, providers } from './providers'
-import type { AppState, MergeTemplate, Provider } from './types'
+import type { AppState, MergeTemplate, Provider, SearchHit } from './types'
 
 const templates: { id: MergeTemplate; label: string; hint: string }[] = [
   { id: 'compare', label: '对比', hint: '列出优缺点和适用场景，给出推荐' },
@@ -20,7 +22,10 @@ const nodeTypes = { chat: ChatNode }
 
 interface Menu { clientX: number; clientY: number; connectFrom?: string }
 
-export function Canvas({ state, selectedNodeID, onSelect }: { state: AppState; selectedNodeID: string | null; onSelect(id: string | null): void }) {
+export function Canvas({ state, selectedNodeID, onSelect, expanded, onExpand, onFollowUp, onLocate }: {
+  state: AppState; selectedNodeID: string | null; onSelect(id: string | null): void
+  expanded: string[]; onExpand(id: string): void; onFollowUp(id: string): void; onLocate(hit: SearchHit): void
+}) {
   const board = state.board!
   const flow = useReactFlow()
   const wrapper = useRef<HTMLDivElement>(null)
@@ -31,6 +36,8 @@ export function Canvas({ state, selectedNodeID, onSelect }: { state: AppState; s
   // Nodes picked for merging: ⌘/Shift/Ctrl-click toggles, a box selection replaces.
   const [picked, setPicked] = useState<string[]>([])
 
+  const actions = useRef({ onExpand, onFollowUp })
+  actions.current = { onExpand, onFollowUp }
   const runningChain = state.chain.total > 0 && state.chain.boardID === board.id ? state.chain : null
 
   // Swift owns the layout. Rebuild from each payload, but keep the local
@@ -45,18 +52,23 @@ export function Canvas({ state, selectedNodeID, onSelect }: { state: AppState; s
         return {
           ...p,
           id: n.id, type: 'chat',
+          zIndex: expanded.includes(n.id) ? 1000 + expanded.indexOf(n.id) : 0,
           position: p?.dragging ? p.position : { x: n.x, y: n.y },
-          selected: p ? p.selected : n.id === selectedNodeID,
+          selected: picked.length ? picked.includes(n.id) : n.id === selectedNodeID,
           data: {
             summary: state.summaries[n.sessionID], inherited: Boolean(n.inherited), nativeFork: n.inherited?.mode === 'native',
             merge: n.merge, stale: n.stale, downstream: n.downstream, chainCurrent: runningChain?.currentNodeID === n.id,
-            picked: picked.includes(n.id),
+            picked: picked.includes(n.id), expanded: expanded.includes(n.id),
+            reading: latestReadable(state.details[n.sessionID]?.messages),
+            onExpand: () => actions.current.onExpand(n.id), onFollowUp: () => actions.current.onFollowUp(n.id),
+            onBranch: () => { const messageID = state.summaries[n.sessionID]?.latestReplyID; if (messageID) send({ type: 'node.branch', boardID: board.id, nodeID: n.id, messageID }) },
+            onQuote: () => { const messageID = state.summaries[n.sessionID]?.latestReplyID; if (messageID) send({ type: 'node.quote', boardID: board.id, nodeID: n.id, messageID }) },
             onDownstream: () => send({ type: 'chain.downstream', boardID: board.id, nodeID: n.id }),
           },
         }
       })
     })
-  }, [board.nodes, board.id, state.summaries, selectedNodeID, runningChain?.currentNodeID, picked])
+  }, [board.nodes, board.id, state.summaries, selectedNodeID, runningChain?.currentNodeID, picked, expanded, state.details])
 
   // A node Swift just created (create, branch, merge) becomes the only selection.
   const focus = state.focusNodeID
@@ -91,6 +103,8 @@ export function Canvas({ state, selectedNodeID, onSelect }: { state: AppState; s
           style: inherit
             ? { stroke: sourceProvider ? providerColor[sourceProvider] : 'var(--edge-data)', strokeWidth: 3 }
             : { stroke: 'var(--edge-data)', strokeWidth: 1.4 },
+          label: !inherit && e.sourceMessageID ? '指定回复' : undefined,
+          labelStyle: { fill: 'var(--mu)', fontSize: 11 }, labelBgStyle: { fill: 'var(--card)' },
           markerEnd: inherit ? undefined : { type: MarkerType.ArrowClosed, color: 'var(--edge-data)', width: 16, height: 16 },
         }
       })
@@ -190,6 +204,10 @@ export function Canvas({ state, selectedNodeID, onSelect }: { state: AppState; s
       <div className="canvas-top" data-drag>
         <span className="canvas-title">{board.title}</span>
         <span className="spacer" />
+        <CanvasSearch state={state} onLocate={hit => {
+          onLocate(hit)
+          window.setTimeout(() => void flow.fitView({ nodes: [{ id: hit.nodeID }], duration: 300, maxZoom: 1, padding: 0.5 }), 100)
+        }} />
         {selectedIDs.length >= 2 && (
           <div className="merge-bar">
             <span className="muted">已选 {selectedIDs.length} 个</span>

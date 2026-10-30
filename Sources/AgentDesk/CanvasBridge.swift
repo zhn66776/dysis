@@ -31,7 +31,7 @@ struct BridgeChain: Encodable, Equatable {
     static let idle = BridgeChain(boardID: nil, total: 0, index: 0, currentNodeID: nil)
 }
 
-struct BridgeEdge: Encodable, Equatable { let id: UUID; let kind: CanvasEdgeKind; let source: UUID; let target: UUID; let pending: Bool? }
+struct BridgeEdge: Encodable, Equatable { let id: UUID; let kind: CanvasEdgeKind; let source: UUID; let target: UUID; let pending: Bool?; let sourceMessageID: UUID? }
 
 struct BridgeBoard: Encodable, Equatable {
     let id: UUID, title: String, nodes: [BridgeNode], edges: [BridgeEdge], viewport: CanvasViewport?
@@ -47,6 +47,7 @@ struct BridgeSummary: Encodable, Equatable {
     let state: String, status: String?, preview: String
     let messageCount: Int, updatedAt: Double
     let contextUsed: Int?, contextWindow: Int?
+    let latestReplyID: UUID?
 }
 
 struct BridgeModelOption: Encodable, Equatable { let id: String; let key: String; let label: String }
@@ -90,7 +91,7 @@ struct BridgeCommand: Decodable {
     struct Rect: Decodable { let x: Double; let y: Double; let w: Double; let h: Double }
     let type: String
     var boardID: UUID?, nodeID: UUID?, sessionID: UUID?, messageID: UUID?
-    var source: UUID?, target: UUID?, connectFrom: UUID?
+    var source: UUID?, target: UUID?, connectFrom: UUID?, panelSessionID: UUID?
     var nodeIDs: [UUID]?, edgeIDs: [UUID]?, sessionIDs: [UUID]?
     var positions: [Position]?
     var provider: ProviderID?
@@ -147,7 +148,8 @@ enum BridgeEncoding {
             remoteShort: s.remoteSessionID.map { String($0.prefix(8)) }, effortChoices: effortChoices,
             state: state, status: running ? status : nil, preview: String(previewSource.prefix(160)),
             messageCount: s.messages.count, updatedAt: s.updatedAt.timeIntervalSince1970 * 1000,
-            contextUsed: s.contextUsage?.usedTokens, contextWindow: s.contextUsage?.windowTokens)
+            contextUsed: s.contextUsage?.usedTokens, contextWindow: s.contextUsage?.windowTokens,
+            latestReplyID: s.messages.last { $0.role == .assistant && $0.state == .complete && !$0.text.isEmpty }?.id)
     }
 
     static func message(_ m: ChatMessage) -> BridgeMessage {
@@ -175,7 +177,7 @@ enum BridgeEncoding {
                               downstream: b.edges.contains { $0.kind == .data && $0.source == n.id && stale.contains($0.target) } ? b.downstreamOrder(from: n.id, include: ran).count : 0)
         }
         let pending = Set(b.nodes.flatMap { CanvasContextBuilder.pendingUpstream(board: b, nodeID: $0.id, sessions: sessions).map(\.edgeID) })
-        let edges = b.edges.map { BridgeEdge(id: $0.id, kind: $0.kind, source: $0.source, target: $0.target, pending: $0.kind == .data ? pending.contains($0.id) : nil) }
+        let edges = b.edges.map { BridgeEdge(id: $0.id, kind: $0.kind, source: $0.source, target: $0.target, pending: $0.kind == .data ? pending.contains($0.id) : nil, sourceMessageID: $0.sourceMessageID) }
         return BridgeBoard(id: b.id, title: b.title, nodes: nodes, edges: edges, viewport: b.viewport)
     }
 }
@@ -285,6 +287,45 @@ final class CanvasBridge: NSObject, ObservableObject, WKScriptMessageHandler {
         case "node.branch":
             guard let b = c.boardID, let n = c.nodeID, let m = c.messageID else { return }
             canvas.branch(boardID: b, nodeID: n, messageID: m)
+        case "node.quote":
+            guard let b = c.boardID, let n = c.nodeID, let m = c.messageID else { return }
+            canvas.quote(boardID: b, nodeID: n, messageID: m)
+        case "board.search":
+            guard let id = c.id, let b = c.boardID, let query = c.text,
+                  let board = canvas.library.boards.first(where: { $0.id == b }) else { return }
+            struct Results: Encodable {
+                let type = "search.results"
+                let id: UUID, boardID: UUID, query: String
+                let hits: [CanvasSearchHit]
+            }
+            evaluatePayload(Results(id: id, boardID: b, query: query, hits: CanvasSearch.find(query, board: board, sessions: canvas.sessionsByID)))
+            return
+        case "context.preview":
+            guard let id = c.id, let b = c.boardID, let n = c.nodeID,
+                  let board = canvas.library.boards.first(where: { $0.id == b }),
+                  let node = board.node(n), let session = canvas.sessionsByID[node.sessionID] else { return }
+            let context = CanvasContextBuilder.context(board: board, nodeID: n, sessions: canvas.sessionsByID)
+            let typed = (c.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            let hasFiles = !app.attachmentDrafts.files[node.sessionID, default: []].isEmpty
+            let prompt = typed.isEmpty ? (hasFiles ? "请分析我附加的文件。" : "（在输入框中填写本轮问题）") : typed
+            var notes = ["这是当前时刻的预览。发送时会重新读取最新输入；文中保留实际的省略与截断标记。"]
+            for edge in board.dataEdges(into: n) {
+                guard let sourceNode = board.node(edge.source), let source = canvas.sessionsByID[sourceNode.sessionID] else { continue }
+                let mode = edge.sourceMessageID == nil ? "跟随最新" : "指定回复"
+                if let reply = CanvasContextBuilder.dataReply(edge: edge, session: source) {
+                    let number = source.messages.filter { $0.role == .assistant }.firstIndex { $0.id == reply.id }.map { $0 + 1 } ?? 1
+                    let delivery = context.upstream.contains { $0.edgeID == edge.id } ? "本轮传入" : "此前已送达，本轮不重复传入"
+                    notes.append("「\(source.title)」· 第 \(number) 条回复 · \(mode) · \(delivery)")
+                } else { notes.append("「\(source.title)」· \(mode) · 暂无可传入的完整回复") }
+            }
+            if session.remoteSessionID != nil { notes.append("当前官方会话还保留此前的历史；以下显示本轮新增的文字输入。断开连线只停止后续传入，已送达内容仍在会话历史中。") }
+            if context.fork != nil { notes.append("首次发送还会通过官方 CLI 原生分叉父会话；其内部历史、工具记录不在此文字预览中展开。") }
+            if !context.inherited.isEmpty { notes.append("回放继承只包含文字；父会话的图片和工具记录不随之传入。") }
+            if app.attachmentDrafts.importing.contains(node.sessionID) { notes.append("附件仍在读取；完成后请刷新预览。") }
+            if app.attachmentDrafts.files[node.sessionID, default: []].contains(where: \.isImage) { notes.append("图片通过独立的图片输入传入；此处显示附件名称及文字输入。") }
+            evaluate(["type": "context.preview", "id": id.uuidString, "nodeID": n.uuidString,
+                      "text": app.canvasInput(prompt: prompt, sessionID: node.sessionID, context: context), "notes": notes])
+            return
         case "edge.create":
             guard let id = c.boardID, let s = c.source, let t = c.target else { return }
             canvas.connect(boardID: id, source: s, target: t)
@@ -292,12 +333,13 @@ final class CanvasBridge: NSObject, ObservableObject, WKScriptMessageHandler {
             guard let id = c.boardID, let ids = c.edgeIDs else { return }
             canvas.deleteEdges(boardID: id, edgeIDs: Set(ids))
         case "session.watch":
-            watched = Set((c.sessionIDs ?? []).prefix(8))
-            panelSessionID = c.sessionIDs?.first
+            let previousPanel = panelSessionID
+            watched = Set((c.sessionIDs ?? []).filter { id in app.sessions.contains { $0.id == id } }.prefix(8))
+            panelSessionID = c.panelSessionID.flatMap { watched.contains($0) ? $0 : nil }
             sentDetails = sentDetails.filter { watched.contains($0.key) }
             sentDrafts = sentDrafts.filter { watched.contains($0.key) }
             // Opening a panel refreshes what can be read without a model turn.
-            if let id = panelSessionID, let provider = app.sessions.first(where: { $0.id == id })?.provider {
+            if panelSessionID != previousPanel, let id = panelSessionID, let provider = app.sessions.first(where: { $0.id == id })?.provider {
                 app.refreshQuota(provider)
                 if (provider == .grok || provider == .gemini), app.availableModels[provider]?.isEmpty ?? true, !app.isChecking.contains(provider) {
                     Task { await app.loadModels(provider) }
@@ -489,6 +531,11 @@ final class CanvasBridge: NSObject, ObservableObject, WKScriptMessageHandler {
         guard old.count == new.count, let o = old.last, let n = new.last, old.dropLast() == new.dropLast(),
               o.id == n.id, o.state == n.state, o.actualModels == n.actualModels, n.text.hasPrefix(o.text) else { return nil }
         return String(n.text.dropFirst(o.text.count))
+    }
+
+    private func evaluatePayload<T: Encodable>(_ payload: T) {
+        guard let data = try? JSONEncoder().encode(payload), let json = String(data: data, encoding: .utf8) else { return }
+        webView?.evaluateJavaScript("window.agentDesk.receive(\(json))")
     }
 
     private func evaluate(_ object: [String: Any]) {

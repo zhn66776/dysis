@@ -145,12 +145,27 @@ final class CanvasModel: ObservableObject {
         guard let board = library.boards.first(where: { $0.id == boardID }), let parent = board.node(nodeID),
               let parentSession = sessionsByID[parent.sessionID],
               parentSession.messages.contains(where: { $0.id == messageID }),
-              let sessionID = app.newSession(provider: parentSession.provider) else { return }
+              let sessionID = app.newSession(provider: parentSession.provider, copyingSettingsFrom: parentSession) else { return }
         app.renameSession(sessionID, title: "分支 · \(parentSession.title)")
-        let node = CanvasNode(sessionID: sessionID, position: board.freePosition(near: CanvasPoint(x: parent.position.x + 320, y: parent.position.y)))
+        let node = CanvasNode(sessionID: sessionID, position: board.freePosition(near: CanvasPoint(x: parent.position.x + 440, y: parent.position.y)))
         update(boardID) { board in
             board.nodes.append(node)
             _ = try? board.connect(source: nodeID, target: node.id, kind: .inherit, sourceMessageID: messageID)
+        }
+        focusNodeID = node.id
+    }
+
+    /// A new conversation with one fixed reply as input; no ancestor history and no send.
+    func quote(boardID: UUID, nodeID: UUID, messageID: UUID) {
+        guard let board = library.boards.first(where: { $0.id == boardID }), let parent = board.node(nodeID),
+              let source = sessionsByID[parent.sessionID],
+              source.messages.contains(where: { $0.id == messageID && $0.role == .assistant && $0.state == .complete && !$0.text.isEmpty }),
+              let sessionID = app.newSession(provider: source.provider, copyingSettingsFrom: source) else { return }
+        app.renameSession(sessionID, title: "引用 · \(source.title)")
+        let node = CanvasNode(sessionID: sessionID, position: board.freePosition(near: .init(x: parent.position.x + 440, y: parent.position.y)))
+        update(boardID) { board in
+            board.nodes.append(node)
+            _ = try? board.connect(source: parent.id, target: node.id, kind: .data, sourceMessageID: messageID)
         }
         focusNodeID = node.id
     }

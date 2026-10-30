@@ -1,11 +1,14 @@
 import { memo } from 'react'
 import { Handle, Position, type Node, type NodeProps } from '@xyflow/react'
+import { Reply } from './Reply'
 import { ProviderMark } from './providers'
-import type { SessionSummary } from './types'
+import type { SessionSummary, MessagePayload } from './types'
 
 export type ChatNodeData = {
   summary?: SessionSummary; inherited: boolean; nativeFork?: boolean
   merge?: string; stale?: boolean; downstream?: number; chainCurrent?: boolean; picked?: boolean
+  expanded?: boolean; reading?: MessagePayload
+  onExpand?(): void; onFollowUp?(): void; onBranch?(): void; onQuote?(): void
   onDownstream?(): void
 }
 export type ChatFlowNode = Node<ChatNodeData, 'chat'>
@@ -22,7 +25,7 @@ function ChatNodeView({ data, selected }: NodeProps<ChatFlowNode>) {
   const s = data.summary
   if (!s) return <div className="node node-missing">会话不存在</div>
   return (
-    <div className={`node p-${s.provider} state-${s.state}${selected ? ' selected' : ''}${data.stale ? ' stale' : ''}${data.chainCurrent ? ' chain-current' : ''}${data.picked ? ' picked' : ''}`}>
+    <div className={`node p-${s.provider} state-${s.state}${selected ? ' selected' : ''}${data.stale ? ' stale' : ''}${data.chainCurrent ? ' chain-current' : ''}${data.picked ? ' picked' : ''}${data.expanded ? ' expanded' : ''}`}>
       <Handle type="target" position={Position.Left} className="port" />
       <div className="node-head">
         <ProviderMark provider={s.provider} size={16} />
@@ -30,8 +33,17 @@ function ChatNodeView({ data, selected }: NodeProps<ChatFlowNode>) {
         {data.merge && <span className="node-badge" title="合流节点：读取所有入线节点的输出">合流 · {data.merge}</span>}
         {data.inherited && <span className="node-tag" title={data.nativeFork ? '原生分叉' : '从父节点分支'}>⑂</span>}
       </div>
-      <div className={`node-body${s.preview ? '' : ' muted'}`}>
+      {data.expanded ? <div className="node-reading nodrag nowheel" onClick={e => e.stopPropagation()}>
+        {data.reading ? <><div className="reading-caption">{data.reading.role === 'assistant' ? '最新回复' : '最新消息'}{data.reading.state === 'streaming' ? ' · 正在生成' : ''}</div><Reply text={data.reading.text} /></> : <div className="muted">{s.messageCount ? '正在读取完整内容…' : '还没有消息，点击追问开始。'}</div>}
+      </div> : <div className={`node-body${s.preview ? '' : ' muted'}`}>
         {plainPreview(s.preview) || (data.inherited ? '分支已建好，发送后带上父节点的历史' : '还没有消息')}
+      </div>}
+      <div className="node-actions nodrag" onClick={e => e.stopPropagation()}>
+        <button title="在画布上阅读完整回复；最多同时展开 6 张，继续展开会收起最早的一张" aria-expanded={Boolean(data.expanded)} onClick={data.onExpand}>{data.expanded ? '收起' : '展开阅读'}</button>
+        <span className="spacer" />
+        <button title="继续当前会话，保留已有历史" onClick={data.onFollowUp}>追问</button>
+        <button title="从最近一条完整回复分支，继承历史" disabled={!s.latestReplyID} onClick={data.onBranch}>分支</button>
+        <button title="新建独立节点，只引用最近一条完整回复" disabled={!s.latestReplyID} onClick={data.onQuote}>引用</button>
       </div>
       <div className="node-foot">
         <span className="meta">{s.modelID || '默认模型'}</span>

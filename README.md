@@ -58,6 +58,13 @@ The main window is now an infinite canvas (design: [design/CANVAS.md](design/CAN
 
 Frontend development: `cd canvas-web && npm ci && npm run dev` opens a browser preview with a local mock host (no model calls). `npm test` runs the frontend state tests. `scripts/build-app.sh` builds the page and copies it into `Contents/Resources/Canvas`.
 
+## Canvas reading and context (0.6.0)
+
+- **展开阅读 / 收起** reads the full latest reply on the canvas, including Markdown, tables and code. Up to six cards can stay expanded (opening a seventh folds the oldest); expanded cards scroll independently; expanding a card does not open a chat or start a model turn.
+- Every card has **追问 / 分支 / 引用**. Follow-up opens the existing conversation and focuses its composer. Branch inherits history through the selected complete reply. Quote creates an independent conversation with one data edge fixed to that exact reply; subsequent source replies do not replace it. Branches and quotations copy the source model and reasoning setting. Both start only when the user sends a message. The same actions are available on individual replies in the panel.
+- **预览本轮输入** (also available by clicking an upstream chip) uses the same native text and attachment assembly as sending. It shows the current additional prompt, truncation markers and source reply numbers, distinguishing fixed quotations from live inputs and newly delivered content from earlier deliveries. Existing official session history and native-fork internals are identified separately; image inputs are separate from the text preview. Preview does not call a model. Sending reads the inputs again, so refresh the preview after upstream changes. Disconnecting an edge stops future input; material already in a provider session remains in that session history.
+- **搜索画布与历史** / **⌘F** searches titles and full local message history on the current board. Click a result (or use arrows and Enter) to locate its node and highlight the matching historical message. Search does not send material to a model or network service.
+
 ## Chat bubbles, files, export and dictation (0.3.0)
 
 Private chats and Plaza discussions use right-aligned user bubbles and left-aligned agent bubbles. Input supports the **附件** button and file drops; each conversation keeps its own pending selection. Files are copied into `Attachments/<UUID>/` under the app data directory and referenced by relative paths in saved history. Originals outside the app are not changed.

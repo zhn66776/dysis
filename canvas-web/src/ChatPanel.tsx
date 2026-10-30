@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
-import Markdown from 'react-markdown'
-import remarkGfm from 'remark-gfm'
+import { Reply } from './Reply'
+import { ContextInspector } from './ContextInspector'
 import { send } from './bridge'
 import { ContextMeter, Dropdown, EffortPicker, ModelPicker, QuotaMeter } from './Controls'
 import { ProviderMark } from './providers'
@@ -12,17 +12,22 @@ interface Props {
   draft: string
   onDraft(text: string): void
   onClose(): void
+  composerFocus: number
+  messageFocus: { messageID?: string; request: number } | null
 }
 
-export function ChatPanel({ state, node, draft, onDraft, onClose }: Props) {
+export function ChatPanel({ state, node, draft, onDraft, onClose, composerFocus, messageFocus }: Props) {
   const board = state.board!
   const summary = state.summaries[node.sessionID]
   const detail = state.details[node.sessionID]
   const running = state.running.has(node.sessionID)
   const [renaming, setRenaming] = useState(false)
   const [showInherited, setShowInherited] = useState(false)
+  const [contextOpen, setContextOpen] = useState(false)
+  const composer = useRef<HTMLTextAreaElement>(null)
   const list = useRef<HTMLDivElement>(null)
   const stick = useRef(true)
+  const locatedRequest = useRef<number | null>(null)
 
   const parentNode = node.inherited ? board.nodes.find(n => n.id === node.inherited!.fromNodeID) : undefined
   const parent = parentNode ? state.summaries[parentNode.sessionID] : undefined
@@ -38,6 +43,13 @@ export function ChatPanel({ state, node, draft, onDraft, onClose }: Props) {
     if (el && stick.current) el.scrollTop = el.scrollHeight
   }, [detail])
   useEffect(() => { stick.current = true }, [node.id])
+
+  useEffect(() => { if (composerFocus) composer.current?.focus() }, [composerFocus])
+  useEffect(() => {
+    if (!messageFocus?.messageID || !detail || locatedRequest.current === messageFocus.request) return
+    const el = list.current?.querySelector<HTMLElement>(`[data-message-id="${CSS.escape(messageFocus.messageID)}"]`)
+    if (el) { locatedRequest.current = messageFocus.request; stick.current = false; el.scrollIntoView({ block: 'center' }) }
+  }, [messageFocus, detail])
 
   if (!summary) return null
 
@@ -109,9 +121,9 @@ export function ChatPanel({ state, node, draft, onDraft, onClose }: Props) {
             <div className="upstream">
               <span className="sub">数据线输入</span>
               {upstream.map(u => (
-                <span key={u.edge.id} className={`chip p-${u.summary?.provider ?? 'claude'} tinted`} title={u.edge.pending ? '有新输出，下一次发送时带上' : '已送达，等待上游的新回复'}>
-                  → {u.summary?.title ?? '未知节点'}{u.edge.pending ? ' · 新' : ''}
-                </span>
+                <button key={u.edge.id} onClick={() => setContextOpen(true)} className={`chip context-chip p-${u.summary?.provider ?? 'claude'} tinted`} title="预览本轮实际输入；断开连线只停止后续传入">
+                  → {u.summary?.title ?? '未知节点'}{u.edge.sourceMessageID ? ' · 指定回复' : ' · 跟随最新'}{u.edge.pending ? ' · 待传入' : ' · 本轮无新增'}
+                </button>
               ))}
             </div>
           )}
@@ -130,11 +142,16 @@ export function ChatPanel({ state, node, draft, onDraft, onClose }: Props) {
           <div className="muted center">{node.inherited ? '在下面输入这个分支要深挖的问题。' : '在下面输入第一条消息。'}</div>
         )}
         {detail?.messages.map(m => (
-          <Message key={m.id} m={m} onBranch={() => send({ type: 'node.branch', boardID: board.id, nodeID: node.id, messageID: m.id })} />
+          <Message key={m.id} m={m} highlighted={messageFocus?.messageID === m.id}
+            onFollowUp={() => composer.current?.focus()}
+            onQuote={() => send({ type: 'node.quote', boardID: board.id, nodeID: node.id, messageID: m.id })}
+            onBranch={() => send({ type: 'node.branch', boardID: board.id, nodeID: node.id, messageID: m.id })} />
         ))}
         {running && summary.status && <div className="status-line">{summary.status}</div>}
       </div>
 
+      <div className="context-launch"><span className="sub">{upstream.length ? `${upstream.length} 个引用来源` : node.inherited ? '分支继承上下文' : '当前会话上下文'}</span><button className="act" onClick={() => setContextOpen(true)}>预览本轮输入</button></div>
+      {contextOpen && <ContextInspector boardID={board.id} nodeID={node.id} draft={draft} onClose={() => setContextOpen(false)} />}
       <div className="composer">
         {(hasFiles || importing) && (
           <div className="attachments">
@@ -149,6 +166,7 @@ export function ChatPanel({ state, node, draft, onDraft, onClose }: Props) {
           </div>
         )}
         <textarea
+          ref={composer}
           value={draft}
           placeholder={running ? '正在回复…' : '继续追问，Enter 发送，Shift+Enter 换行'}
           rows={3}
@@ -167,9 +185,7 @@ export function ChatPanel({ state, node, draft, onDraft, onClose }: Props) {
               { key: 'mcp', label: 'MCP 工具…', detail: '结果插入输入框', onSelect: () => send({ type: 'app.open', window: 'mcp', sessionID: summary.id }) },
             ]}
           />
-          <span className="composer-hint">{upstream.length > 0 && !summary.remoteShort
-            ? `发送 1 次，带上 ${upstream.filter(u => u.edge.pending).length} 个上游输出${upstream.some(u => !u.edge.pending) ? `（${upstream.filter(u => !u.edge.pending).length} 个还没有回复）` : ''}`
-            : '也可以把文件拖进窗口'}</span>
+          <span className="composer-hint">{upstream.some(u => u.edge.pending) ? `发送时带上 ${upstream.filter(u => u.edge.pending).length} 个新输出` : '发送 1 次 · 可先预览输入'}</span>
           <span className="spacer" />
           {running ? (
             <button className="send stop" aria-label="停止" onClick={() => send({ type: 'chat.stop', sessionID: summary.id })}>■</button>
@@ -196,10 +212,10 @@ function inheritNote(node: NodePayload, messages?: MessagePayload[]) {
   return first ? '已在第一次发送时通过回放继承带上父节点的文字记录。' : '已继承。'
 }
 
-function Message({ m, readOnly, onBranch }: { m: MessagePayload; readOnly?: boolean; onBranch?(): void }) {
+function Message({ m, readOnly, onBranch, onQuote, onFollowUp, highlighted }: { m: MessagePayload; readOnly?: boolean; highlighted?: boolean; onBranch?(): void; onQuote?(): void; onFollowUp?(): void }) {
   if (m.role === 'user') {
     return (
-      <div className="msg-user">
+      <div data-message-id={m.id} className={`msg-user${highlighted ? ' search-highlight' : ''}`}>
         {m.contextSources && m.contextSources.length > 0 && (
           <div className="context-sources">{m.contextSources.map(s => <span key={s} className="chip">{s}</span>)}</div>
         )}
@@ -211,18 +227,16 @@ function Message({ m, readOnly, onBranch }: { m: MessagePayload; readOnly?: bool
     )
   }
   return (
-    <div className={`msg-assistant state-${m.state}`}>
-      <div className="reply">
-        <Markdown remarkPlugins={[remarkGfm]} components={{ a: ({ href, children }) => <a href={href} target="_blank" rel="noreferrer">{children}</a> }}>
-          {m.text}
-        </Markdown>
-        {m.state === 'streaming' && <span className="caret" />}
-      </div>
+    <div data-message-id={m.id} className={`msg-assistant state-${m.state}${highlighted ? ' search-highlight' : ''}`}>
+      <Reply text={m.text} />
+      {m.state === 'streaming' && <span className="caret" />}
       {m.state === 'failed' && <div className="msg-note danger">回复失败</div>}
       {m.state === 'cancelled' && <div className="msg-note">已停止</div>}
       {!readOnly && m.state === 'complete' && (
         <div className="msg-actions">
-          <button className="act" onClick={onBranch}>⑂ 从这里分支</button>
+          <button className="act" onClick={onFollowUp}>追问</button>
+          <button className="act" title="继承截至这条回复的历史" onClick={onBranch}>⑂ 从这里分支</button>
+          <button className="act" title="新建独立节点，只引用这条回复" onClick={onQuote}>引用</button>
           <button className="act" onClick={() => send({ type: 'clipboard.copy', text: m.text })}>复制</button>
           {m.actualModels && m.actualModels.length > 0 && <span className="meta muted">{m.actualModels.join(' · ')}</span>}
         </div>

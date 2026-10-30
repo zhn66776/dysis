@@ -252,3 +252,14 @@ cd canvas-web && npm test                # 前端状态逻辑的离线测试
 swift test                               # harness 和画布模型的离线测试
 bash scripts/build-app.sh                # 构建前端并打包进 build/AgentDesk.app
 ```
+
+## 8. 第一轮画布交互（0.6.0）
+
+展开状态是当前窗口的阅读状态；位置与会话仍由 Swift 保存。展开节点与面板共同声明要读取的会话，`session.watch.panelSessionID` 单独指定文件拖放与额度查询的目标，展开节点不会改变它。保留原有最多 8 个完整会话的订阅上限：面板与父节点优先，画布最多同时展开 6 张卡片，第七张收起最早展开的一张。
+
+新增桥接命令：
+- `node.quote { boardID, nodeID, messageID }`：独立会话，仅引用指定完整回复；数据线沿用 `sourceMessageID` 保存消息主键，无此字段的数据线继续跟随最新回复。
+- `board.search { boardID, text, id }` → `search.results { boardID, query, id, hits: [{nodeID, messageID?, excerpt}] }`：Swift 搜索完整本地记录，请求 ID 用于丢弃迟到结果。
+- `context.preview { boardID, nodeID, text, id }` → `context.preview { nodeID, id, text, notes }`：复用发送路径的文字与附件组装，只读取状态。前端提供刷新；原生分叉与官方已有历史通过说明单独展示。
+
+节点摘要增加 `latestReplyID`，用于明确分支与引用的完整回复；展开时才订阅完整记录。搜索定位打开完整历史并高亮命中消息，不通过加载整个画布的完整历史实现搜索。

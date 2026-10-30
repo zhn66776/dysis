@@ -1,7 +1,7 @@
 import Foundation
 
 /// Inherit edges carry a parent's history up to a fork point; data edges
-/// carry only the source node's latest complete reply.
+/// carry a source reply: latest by default, or a specific quoted message.
 public enum CanvasEdgeKind: String, Codable, Sendable { case inherit, data }
 
 public struct CanvasPoint: Codable, Equatable, Sendable {
@@ -47,7 +47,7 @@ public struct CanvasEdge: Identifiable, Codable, Equatable, Sendable {
     public var kind: CanvasEdgeKind
     public var source: UUID
     public var target: UUID
-    /// Inherit edges: the last parent message included in the branch.
+    /// Inherit: the fork point. Data: a fixed reply, or nil to follow latest.
     public var sourceMessageID: UUID?
     /// Data edges: the source reply most recently placed in the target's prompt.
     public var lastDeliveredMessageID: UUID?
@@ -359,12 +359,20 @@ public enum CanvasContextBuilder {
         return last.hasPrefix(prefix) ? last : prefix + last
     }
 
-    /// Latest complete reply of each data-edge source that the target has not received yet.
+    /// Fixed quotations keep their message identity; missing quotations never follow latest.
+    public static func dataReply(edge: CanvasEdge, session: ChatSession) -> ChatMessage? {
+        let reply: ChatMessage?
+        if let id = edge.sourceMessageID { reply = session.messages.first { $0.id == id } }
+        else { reply = session.messages.last { $0.role == .assistant } }
+        guard let reply, reply.role == .assistant, reply.state == .complete, !reply.text.isEmpty else { return nil }
+        return reply
+    }
+
     public static func pendingUpstream(board: CanvasBoard, nodeID: UUID, sessions: [UUID: ChatSession]) -> [CanvasPromptContext.Upstream] {
         board.dataEdges(into: nodeID).compactMap { edge in
             guard let source = board.node(edge.source), let session = sessions[source.sessionID],
-                  let reply = session.messages.last(where: { $0.role == .assistant }),
-                  reply.state == .complete, !reply.text.isEmpty, reply.id != edge.lastDeliveredMessageID else { return nil }
+                  let reply = dataReply(edge: edge, session: session),
+                  reply.id != edge.lastDeliveredMessageID else { return nil }
             return .init(edgeID: edge.id, messageID: reply.id, title: session.title, provider: session.provider, text: reply.text)
         }
     }
