@@ -87,6 +87,8 @@ export interface SessionSummary {
   latestReplyID?: string
   contextUsed?: number
   contextWindow?: number
+  /** The node's own rules (third rule layer), sent after the global ones. */
+  rules?: string | null
 }
 
 export interface ModelOption { id: string; key: string; label: string }
@@ -141,7 +143,16 @@ export interface Region { x: number; y: number; w: number; h: number }
 
 export interface SearchHit { nodeID: string; messageID?: string; excerpt: string }
 export interface SearchResults { type: 'search.results'; id: string; boardID: string; query: string; hits: SearchHit[] }
-export interface ContextPreview { type: 'context.preview'; id: string; nodeID: string; text: string; notes: string[] }
+/** One active rule source this turn: injected by AgentDesk or read by the CLI itself. */
+export interface RuleSourcePayload { title: string; characters: number; delivery: 'injected' | 'native'; path?: string; note?: string }
+export interface ContextPreview {
+  type: 'context.preview'; id: string; nodeID: string; text: string; notes: string[]
+  rules?: RuleSourcePayload[]
+  /** The injected rules exactly as sent; empty when nothing is injected. */
+  rulesText?: string
+  /** Where the injected rules go for this provider. */
+  rulesChannel?: string
+}
 export type Incoming = StatePayload | ComposerInsert | ConfirmShow | ChromeInsets | SearchResults | ContextPreview
 
 export type Command =
@@ -174,6 +185,8 @@ export type Command =
   | { type: 'viewport.save'; boardID: string; x: number; y: number; zoom: number }
   | { type: 'clipboard.copy'; text: string }
   | { type: 'app.open'; window: 'settings' | 'classic' | 'mcp'; sessionID?: string }
+  | { type: 'app.open'; window: 'project'; boardID: string }
+  | { type: 'session.setRules'; sessionID: string; text: string }
   | { type: 'error.dismiss' }
   | { type: 'session.setModel'; sessionID: string; modelID: string }
   | { type: 'session.setEffort'; sessionID: string; effort: string | null }

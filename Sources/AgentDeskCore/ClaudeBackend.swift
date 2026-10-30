@@ -24,7 +24,7 @@ public struct ClaudeBackend: AgentBackend, Sendable {
                     // A files call can wait for the user's answer (FolderAccessServer.timeout).
                     if !request.mcpServers.isEmpty { environment["MCP_TOOL_TIMEOUT"] = String(FolderAccessPolicy.toolTimeoutSeconds * 1000) }
 
-                    var arguments = try ClaudeBackend.commonArguments(modelID: request.modelID, effort: request.reasoningEffort, mcpServers: request.mcpServers, project: request.projectAccess)
+                    var arguments = try ClaudeBackend.commonArguments(modelID: request.modelID, effort: request.reasoningEffort, mcpServers: request.mcpServers, project: request.projectAccess, instructions: request.instructions)
                     arguments += try ClaudeBackend.sessionArguments(for: request)
                     let fork = request.remoteSessionID?.isEmpty == false ? nil : request.forkFrom
                     let imageContent = try MultimodalInputSupport.claudeContent(prompt: request.prompt, images: request.images)
@@ -181,7 +181,28 @@ public struct ClaudeBackend: AgentBackend, Sendable {
     /// project's and the user's settings loaded; MCP is still only ours.
     static let maxProjectTurns = 100
 
-    static func commonArguments(modelID: String, effort: String?, mcpServers: [AgentMCPServer] = [], project: Bool = false) throws -> [String] {
+    static func commonArguments(modelID: String, effort: String?, mcpServers: [AgentMCPServer] = [], project: Bool = false, instructions: String? = nil) throws -> [String] {
+        try commonToolArguments(modelID: modelID, effort: effort, mcpServers: mcpServers, project: project)
+            + ruleArguments(instructions: instructions, project: project)
+    }
+
+    /// AgentDesk's rule layers ride on `--append-system-prompt`. The system
+    /// prompt snapshot is off so an edited rule applies from the next turn
+    /// rather than after the next compaction. In a project, `AGENTS.md`
+    /// loads beside `CLAUDE.md` (once when `CLAUDE.md` already imports it).
+    static func ruleArguments(instructions: String?, project: Bool) throws -> [String] {
+        var arguments = ["--system-prompt-snapshot", "off"]
+        if project { arguments += ["--settings", try settingsJSON(project: project)] }
+        if let instructions, !instructions.isEmpty { arguments += ["--append-system-prompt", instructions] }
+        return arguments
+    }
+
+    static func settingsJSON(project: Bool) throws -> String {
+        let settings: [String: Any] = ["instructionFiles": "claude-md-and-agents-md"]
+        return String(decoding: try JSONSerialization.data(withJSONObject: settings, options: [.sortedKeys]), as: UTF8.self)
+    }
+
+    private static func commonToolArguments(modelID: String, effort: String?, mcpServers: [AgentMCPServer], project: Bool) throws -> [String] {
         if project {
             var arguments = ["--strict-mcp-config", "--mcp-config", try mcpConfigJSON(mcpServers),
                              "--permission-mode", "bypassPermissions", "--max-turns", String(maxProjectTurns), "--model", modelID,

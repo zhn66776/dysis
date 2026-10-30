@@ -54,6 +54,26 @@ final class CodexBackendTests: XCTestCase {
         XCTAssertTrue(events.contains(.textDelta("EFFORT_high")))
     }
 
+    /// Codex keeps its own base instructions; chat mode's tool note and
+    /// AgentDesk's rules arrive as developer instructions, on start and resume.
+    func testRulesAndChatToolNoteGoToDeveloperInstructions() async throws {
+        let chat = AgentRequest(localSessionID: UUID(), remoteSessionID: nil, prompt: "hi", workingDirectory: fixtureDirectory, modelID: "", executableURL: fixtureURL, instructions: "## 本节点规则\n\n只改 src/api/")
+        let (events, error) = await collect(CodexBackend(executableURL: fixtureURL).stream(chat))
+        XCTAssertNil(error)
+        XCTAssertTrue(events.contains(.textDelta("BASE_KEPT")))
+        XCTAssertTrue(events.contains(.textDelta("DEV_Use no tools in this session. Answer with text only.\n\n## 本节点规则\n\n只改 src/api/")))
+
+        let resumed = AgentRequest(localSessionID: UUID(), remoteSessionID: "thr-existing", prompt: "hi", workingDirectory: fixtureDirectory, modelID: "", executableURL: fixtureURL, projectAccess: true, instructions: "G")
+        let (again, resumeError) = await collect(CodexBackend(executableURL: fixtureURL).stream(resumed))
+        XCTAssertNil(resumeError)
+        XCTAssertTrue(again.contains(.textDelta("BASE_KEPT")))
+        XCTAssertTrue(again.contains(.textDelta("DEV_G")), "a trusted project carries only the rules")
+
+        let plain = AgentRequest(localSessionID: UUID(), remoteSessionID: nil, prompt: "hi", workingDirectory: fixtureDirectory, modelID: "", executableURL: fixtureURL, projectAccess: true)
+        let (none, _) = await collect(CodexBackend(executableURL: fixtureURL).stream(plain))
+        XCTAssertTrue(none.contains(.textDelta("DEV_NONE")))
+    }
+
     func testAPIAccountIsRejectedBeforeThreadCreation() async throws {
         try setFixtureMode("api")
         let request = AgentRequest(localSessionID: UUID(), remoteSessionID: nil, prompt: "hello", workingDirectory: fixtureDirectory, modelID: "gpt-6.1-sol", executableURL: fixtureURL)
@@ -122,6 +142,7 @@ assert "features.multi_agent_v2=false" in sys.argv
 assert "features.memories=false" in sys.argv
 assert "features.plugins=false" in sys.argv
 mode = mode_path.read_text().strip() if mode_path.exists() else "success"
+thread_params = {}
 
 def send(obj):
     sys.stdout.write(json.dumps(obj) + "\n")
@@ -151,8 +172,10 @@ for line in sys.stdin:
         else:
             send({"id": ident, "result": {"rateLimits": {"primary": {"usedPercent": 42, "windowDurationMins": 300, "resetsAt": 1793300000}, "secondary": {"usedPercent": 7, "windowDurationMins": 10080, "resetsAt": None}}}})
     elif method == "thread/start":
+        thread_params = msg.get("params", {})
         send({"id": ident, "result": {"thread": {"id": "thr-fixture"}}})
     elif method == "thread/resume":
+        thread_params = msg.get("params", {})
         send({"id": ident, "result": {"thread": {"id": "thr-resumed"}}})
     elif method == "turn/start":
         if mode == "turn-error":
@@ -169,6 +192,9 @@ for line in sys.stdin:
         send({"method": "item/agentMessage/delta", "params": {"threadId": "thr-fixture", "turnId": "turn-fixture", "itemId": "item-fixture", "delta": "MODEL_" + model}})
         send({"method": "item/agentMessage/delta", "params": {"threadId": "thr-fixture", "turnId": "turn-fixture", "itemId": "item-fixture", "delta": "EFFORT_" + effort}})
         send({"method": "item/agentMessage/delta", "params": {"threadId": "thr-fixture", "turnId": "turn-fixture", "itemId": "item-fixture", "delta": disabled}})
+        base = "BASE_SET" if "baseInstructions" in thread_params else "BASE_KEPT"
+        send({"method": "item/agentMessage/delta", "params": {"threadId": "thr-fixture", "turnId": "turn-fixture", "itemId": "item-fixture", "delta": base}})
+        send({"method": "item/agentMessage/delta", "params": {"threadId": "thr-fixture", "turnId": "turn-fixture", "itemId": "item-fixture", "delta": "DEV_" + str(thread_params.get("developerInstructions", "NONE"))}})
         send({"method": "item/agentMessage/delta", "params": {"threadId": "thr-fixture", "turnId": "turn-fixture", "itemId": "item-fixture", "delta": "hello"}})
         send({"method": "turn/completed", "params": {"threadId": "thr-fixture", "turn": {"id": "turn-fixture", "status": "completed"}}})
 """#

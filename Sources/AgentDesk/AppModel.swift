@@ -21,6 +21,8 @@ final class AppModel: ObservableObject {
     private var quotaReadAt: [ProviderID: Date] = [:]
     // A presentation mode for this app launch, not an execution permission.
     @Published var developerModeEnabled = false
+    /// AgentDesk's global rules (`rules.md` in the data folder), sent with every canvas and private chat turn.
+    @Published private(set) var globalRules = ""
 
     private var store: LocalStore?
     private var tasks: [UUID: Task<Void, Never>] = [:]
@@ -55,6 +57,7 @@ final class AppModel: ObservableObject {
             storageReadable = false
             errorMessage = "无法读取本地记录，原文件已保留。\(error.localizedDescription)"
         }
+        globalRules = GlobalRulesStore(root: resolvedRoot).load()
         folderAccess.describe = { [weak self] id in
             self?.sessions.first { $0.id == id }.map { ($0.title, $0.provider) }
         }
@@ -140,6 +143,33 @@ final class AppModel: ObservableObject {
         persist()
     }
 
+    func saveGlobalRules(_ text: String) {
+        do {
+            try GlobalRulesStore(root: dataRoot).save(text)
+            globalRules = GlobalRulesStore(root: dataRoot).load()
+        } catch { errorMessage = "全局规则未能保存：\(error.localizedDescription)" }
+    }
+
+    func setSessionRules(_ id: UUID, rules: String) {
+        guard storageReadable, let i = sessions.firstIndex(where: { $0.id == id }) else { return }
+        let trimmed = String(rules.prefix(8_000)).trimmingCharacters(in: .whitespacesAndNewlines)
+        sessions[i].rules = trimmed.isEmpty ? nil : trimmed
+        persist()
+    }
+
+    /// The rule layers a turn of this session carries; read from disk each
+    /// time, so an edited `AGENTS.md` applies to the next message.
+    func composedRules(sessionID: UUID, project: CanvasProject?) -> ComposedRules {
+        guard let session = sessions.first(where: { $0.id == sessionID }) else { return ComposedRules(text: nil, sources: []) }
+        let folder = project.map { URL(fileURLWithPath: $0.path, isDirectory: true) }.flatMap { FileManager.default.fileExists(atPath: $0.path) ? $0 : nil }
+        return RuleLayers.compose(provider: session.provider, projectAccess: projectAccess(session, project: project), global: globalRules,
+                                  project: folder.map(ProjectRules.read), node: session.rules ?? "")
+    }
+
+    private func projectAccess(_ session: ChatSession, project: CanvasProject?) -> Bool {
+        project?.isTrusted == true && project?.path == session.workingDirectory
+    }
+
     func saveConfiguration() {
         guard storageReadable else { return }
         do { try store?.saveConfiguration(configuration) }
@@ -214,8 +244,9 @@ final class AppModel: ObservableObject {
         sessions[index].updatedAt = Date()
         let session = sessions[index]
         let request = AgentRequest(localSessionID: id, remoteSessionID: session.remoteSessionID, prompt: input, workingDirectory: URL(fileURLWithPath: session.workingDirectory), modelID: session.modelID, executableURL: executable, reasoningEffort: session.reasoningEffort, images: images, forkFrom: session.remoteSessionID == nil ? context.fork : nil, mcpServers: modelMCPServers(sessionID: id),
-                                   projectAccess: project?.isTrusted == true && project?.path == session.workingDirectory,
-                                   userFolder: !URL(fileURLWithPath: session.workingDirectory).path.hasPrefix(dataRoot.path + "/"))
+                                   projectAccess: projectAccess(session, project: project),
+                                   userFolder: !URL(fileURLWithPath: session.workingDirectory).path.hasPrefix(dataRoot.path + "/"),
+                                   instructions: composedRules(sessionID: id, project: project).text)
         let backend: any AgentBackend
         switch provider {
         case .claude: backend = ClaudeBackend()

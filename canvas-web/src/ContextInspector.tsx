@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { send, subscribe } from './bridge'
 import type { ContextPreview } from './types'
+import { ruleSourceLine } from './rules'
 
 export function ContextInspector({ boardID, nodeID, draft, onClose }: { boardID: string; nodeID: string; draft: string; onClose(): void }) {
   const [preview, setPreview] = useState<ContextPreview | null>(null)
@@ -33,8 +34,20 @@ export function ContextInspector({ boardID, nodeID, draft, onClose }: { boardID:
     }}>
       <header><div><strong>本轮上下文预览</strong><div className="sub">本地读取 · 不调用模型</div></div><button className="icon-btn" aria-label="关闭上下文预览" onClick={onClose}>✕</button></header>
       <div className="context-notes">{preview?.notes.map(n => <p key={n}>{n}</p>)}</div>
+      {preview && <RuleSources preview={preview} />}
       <pre className="context-input">{preview?.text ?? '正在读取本轮输入…'}</pre>
       <footer><span className="sub">文字输入包含文档提取内容；原生会话历史与图片另行传入。</span><button className="btn" onClick={refresh}>刷新预览</button></footer>
     </div>
   </div>
+}
+
+/** The rule layers active this turn, with their sizes; the injected text on demand. */
+function RuleSources({ preview }: { preview: ContextPreview }) {
+  const rules = preview.rules ?? []
+  return <section className="rule-sources">
+    <div className="sub">本轮生效的规则{preview.rulesChannel ? ` · 注入到 ${preview.rulesChannel}` : ''}</div>
+    {rules.length === 0 ? <p className="muted">没有生效的规则。可以在设置里写全局规则，在项目设置里写 AGENTS.md，或给这个节点加规则。</p>
+      : <ul>{rules.map(r => <li key={r.title + (r.path ?? '')}>{ruleSourceLine(r)}</li>)}</ul>}
+    {preview.rulesText && <details><summary>查看注入的规则全文</summary><pre className="context-input">{preview.rulesText}</pre></details>}
+  </section>
 }

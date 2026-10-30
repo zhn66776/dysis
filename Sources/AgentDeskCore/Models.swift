@@ -51,6 +51,8 @@ public struct ChatSession: Identifiable, Codable, Equatable, Sendable {
     public var reasoningEffort: String?
     /// Context occupancy reported with the latest reply, if the provider reports it.
     public var contextUsage: ContextUsage?
+    /// The node's own rules (H4 third layer), sent after the global ones.
+    public var rules: String?
     public init(id: UUID = UUID(), title: String = "新对话", provider: ProviderID, modelID: String, remoteSessionID: String? = nil, workingDirectory: String, messages: [ChatMessage] = [], createdAt: Date = Date(), updatedAt: Date = Date(), reasoningEffort: String? = nil) {
         self.id = id; self.title = title; self.provider = provider; self.modelID = modelID; self.remoteSessionID = remoteSessionID; self.workingDirectory = workingDirectory; self.messages = messages; self.createdAt = createdAt; self.updatedAt = updatedAt
         self.reasoningEffort = reasoningEffort
@@ -150,8 +152,13 @@ public struct AgentRequest: Sendable {
     /// The working directory is the user's own folder (a project), not a
     /// workspace AgentDesk made: files there that AgentDesk did not write are left alone.
     public let userFolder: Bool
-    public init(localSessionID: UUID, remoteSessionID: String?, prompt: String, workingDirectory: URL, modelID: String, executableURL: URL, reasoningEffort: String? = nil, images: [AgentImageInput] = [], forkFrom: AgentFork? = nil, mcpServers: [AgentMCPServer] = [], projectAccess: Bool = false, userFolder: Bool = false) {
+    /// AgentDesk's rule layers for this turn (global, injected project
+    /// parts, node), already composed; nil sends none. Each backend puts it
+    /// in its own instruction channel.
+    public let instructions: String?
+    public init(localSessionID: UUID, remoteSessionID: String?, prompt: String, workingDirectory: URL, modelID: String, executableURL: URL, reasoningEffort: String? = nil, images: [AgentImageInput] = [], forkFrom: AgentFork? = nil, mcpServers: [AgentMCPServer] = [], projectAccess: Bool = false, userFolder: Bool = false, instructions: String? = nil) {
         self.mcpServers = mcpServers
+        self.instructions = instructions.flatMap { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : $0 }
         self.projectAccess = projectAccess
         self.userFolder = userFolder || projectAccess
         self.localSessionID = localSessionID; self.remoteSessionID = remoteSessionID; self.prompt = prompt; self.workingDirectory = workingDirectory; self.modelID = modelID; self.executableURL = executableURL

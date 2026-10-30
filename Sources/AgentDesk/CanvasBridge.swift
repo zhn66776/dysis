@@ -73,6 +73,8 @@ struct BridgeSummary: Encodable, Equatable {
     let messageCount: Int, updatedAt: Double
     let contextUsed: Int?, contextWindow: Int?
     let latestReplyID: UUID?
+    /// The node's own rules (third rule layer); nil when it has none.
+    let rules: String?
 }
 
 struct BridgeModelOption: Encodable, Equatable { let id: String; let key: String; let label: String }
@@ -176,7 +178,8 @@ enum BridgeEncoding {
             state: state, status: running ? status : nil, preview: String(previewSource.prefix(160)),
             messageCount: s.messages.count, updatedAt: s.updatedAt.timeIntervalSince1970 * 1000,
             contextUsed: s.contextUsage?.usedTokens, contextWindow: s.contextUsage?.windowTokens,
-            latestReplyID: s.messages.last { $0.role == .assistant && $0.state == .complete && !$0.text.isEmpty }?.id)
+            latestReplyID: s.messages.last { $0.role == .assistant && $0.state == .complete && !$0.text.isEmpty }?.id,
+            rules: s.rules)
     }
 
     static func message(_ m: ChatMessage) -> BridgeMessage {
@@ -426,8 +429,16 @@ final class CanvasBridge: NSObject, ObservableObject, WKScriptMessageHandler {
             if !context.inherited.isEmpty { notes.append("回放继承只包含文字；父会话的图片和工具记录不随之传入。") }
             if app.attachmentDrafts.importing.contains(node.sessionID) { notes.append("附件仍在读取；完成后请刷新预览。") }
             if app.attachmentDrafts.files[node.sessionID, default: []].contains(where: \.isImage) { notes.append("图片通过独立的图片输入传入；此处显示附件名称及文字输入。") }
+            let rules = app.composedRules(sessionID: node.sessionID, project: board.project)
+            let sources: [[String: Any]] = rules.sources.map { source in
+                var item: [String: Any] = ["title": source.title, "characters": source.characters, "delivery": source.delivery.rawValue]
+                if let path = source.path { item["path"] = NSString(string: path).abbreviatingWithTildeInPath }
+                if let note = source.note { item["note"] = note }
+                return item
+            }
             evaluate(["type": "context.preview", "id": id.uuidString, "nodeID": n.uuidString,
-                      "text": app.canvasInput(prompt: prompt, sessionID: node.sessionID, context: context), "notes": notes])
+                      "text": app.canvasInput(prompt: prompt, sessionID: node.sessionID, context: context), "notes": notes,
+                      "rules": sources, "rulesText": rules.text ?? "", "rulesChannel": Self.ruleChannel(session.provider)])
             return
         case "source.createFiles":
             guard let id = c.boardID, let x = c.x, let y = c.y else { return }
@@ -465,6 +476,9 @@ final class CanvasBridge: NSObject, ObservableObject, WKScriptMessageHandler {
                     Task { await app.loadModels(provider) }
                 }
             }
+        case "session.setRules":
+            guard let id = c.sessionID, let text = c.text, !app.runningSessionIDs.contains(id) else { return }
+            app.setSessionRules(id, rules: text)
         case "session.setModel":
             guard let id = c.sessionID, let modelID = c.modelID else { return }
             app.setSessionModel(id, modelID: modelID)
@@ -519,7 +533,7 @@ final class CanvasBridge: NSObject, ObservableObject, WKScriptMessageHandler {
             NSPasteboard.general.setString(text, forType: .string)
             return
         case "app.open":
-            if let window = c.window, ["settings", "classic", "mcp"].contains(window) { openWindow(window, c.sessionID) }
+            if let window = c.window, ["settings", "classic", "mcp", "project"].contains(window) { openWindow(window, window == "project" ? c.boardID : c.sessionID) }
             return
         case "error.dismiss":
             app.errorMessage = nil
@@ -528,6 +542,15 @@ final class CanvasBridge: NSObject, ObservableObject, WKScriptMessageHandler {
         default: return
         }
         schedulePush()
+    }
+
+    /// Where the injected rule layers go for this provider, for the context preview.
+    static func ruleChannel(_ provider: ProviderID) -> String {
+        switch provider {
+        case .claude: return "Claude Code · --append-system-prompt"
+        case .codex: return "Codex · thread developerInstructions"
+        case .grok, .gemini: return "Cursor · 消息前的单独一段"
+        }
     }
 
     /// Asks the page to show its confirmation dialog (`confirm.show`). The

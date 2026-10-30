@@ -33,6 +33,7 @@ struct SettingsView: View {
                     ForEach(ProviderID.allCases) { provider in
                         ProviderSettingsSection(model: model, provider: provider)
                     }
+                    GlobalRulesSettings(model: model)
                     FolderAccessSettings(model: model, center: model.folderAccess)
                     if model.developerModeEnabled { SecurityNote() }
                     HStack {
@@ -307,5 +308,30 @@ private struct SecurityNote: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 12).padding(.vertical, 10)
         .background(Theme.chip, in: RoundedRectangle(cornerRadius: 8))
+    }
+}
+
+/// The first rule layer: applies to every canvas and private chat, chat mode included.
+private struct GlobalRulesSettings: View {
+    @ObservedObject var model: AppModel
+    @State private var text = ""
+    @State private var loaded = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("AgentDesk 全局规则").font(Theme.sans(13, weight: .medium))
+            Text("每一轮都带上，包括聊天模式。Claude Code 用 --append-system-prompt，Codex 用 developerInstructions，Cursor 放在消息前面。项目规则（AGENTS.md）和节点规则排在它后面，优先级更高。")
+                .font(Theme.sans(11)).foregroundStyle(Theme.muted).fixedSize(horizontal: false, vertical: true)
+            TextEditor(text: $text).themedEditor().frame(height: 110)
+            HStack {
+                Text("\(text.trimmingCharacters(in: .whitespacesAndNewlines).count) 字 · 保存在数据目录的 rules.md").metaText()
+                Spacer()
+                Button("保存") { model.saveGlobalRules(text) }
+                    .buttonStyle(SecondaryButtonStyle())
+                    .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines) == model.globalRules.trimmingCharacters(in: .whitespacesAndNewlines))
+            }
+        }
+        .themedCard()
+        .onAppear { if !loaded { text = model.globalRules; loaded = true } }
     }
 }

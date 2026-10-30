@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { Reply } from './Reply'
 import { ContextInspector } from './ContextInspector'
+import { NodeRules } from './NodeRules'
 import { send } from './bridge'
 import { ContextMeter, Dropdown, EffortPicker, ModelPicker, QuotaMeter } from './Controls'
 import { ProviderMark } from './providers'
@@ -151,7 +152,7 @@ export function ChatPanel({ state, node, draft, onDraft, onClose, composerFocus,
         {running && summary.status && <div className="status-line">{summary.status}</div>}
       </div>
 
-      <div className="context-launch"><span className="sub">{upstream.length ? `${upstream.length} 个引用来源` : node.inherited ? '分支继承上下文' : '当前会话上下文'}</span><button className="act" onClick={() => setContextOpen(true)}>预览本轮输入</button></div>
+      <div className="context-launch"><span className="sub">{upstream.length ? `${upstream.length} 个引用来源` : node.inherited ? '分支继承上下文' : '当前会话上下文'}</span><span className="spacer" /><NodeRules summary={summary} locked={running} /><button className="act" onClick={() => setContextOpen(true)}>预览本轮输入</button></div>
       {contextOpen && <ContextInspector boardID={board.id} nodeID={node.id} draft={draft} onClose={() => setContextOpen(false)} />}
       <div className="composer">
         {(hasFiles || importing) && (

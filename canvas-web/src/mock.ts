@@ -2,9 +2,9 @@
 // Replies are canned local text, clearly labelled; nothing leaves the page.
 import { previewLayout } from './organize'
 import { searchExcerpt } from './interactions'
-import type { Incoming, BoardPayload, Command, MessagePayload, NodePayload, Provider, SessionSummary, SourceFile, SourcePayload, StatePayload } from './types'
+import type { Incoming, BoardPayload, Command, ContextPreview, MessagePayload, NodePayload, Provider, RuleSourcePayload, SessionSummary, SourceFile, SourcePayload, StatePayload } from './types'
 
-interface MockSession { id: string; title: string; provider: Provider; modelID: string; started: boolean; messages: MessagePayload[] }
+interface MockSession { id: string; title: string; provider: Provider; modelID: string; started: boolean; messages: MessagePayload[]; rules?: string }
 
 const models: Record<Provider, string> = { claude: 'sonnet', codex: 'gpt-6.1-sol', grok: 'grok-4.7-medium', gemini: 'gemini-4-argon-medium' }
 const uid = () => crypto.randomUUID()
@@ -80,7 +80,7 @@ export function createMockHost(emit: (p: Incoming) => void) {
   const summary = (s: MockSession): SessionSummary => {
     const last = [...s.messages].reverse().find(m => m.role === 'assistant')
     const state = running.has(s.id) ? 'running' : last ? (last.state === 'streaming' ? 'running' : last.state) : 'empty'
-    return { id: s.id, title: s.title, provider: s.provider, modelID: s.modelID, modelKey: s.modelID, effort: efforts.get(s.id), effortChoices: ['low', 'medium', 'high', 'xhigh', 'max'], remoteShort: s.started ? s.id.slice(0, 8) : undefined, state, latestReplyID: [...s.messages].reverse().find(m => m.role === 'assistant' && m.state === 'complete' && m.text)?.id, preview: (last?.text ?? s.messages.at(-1)?.text ?? '').slice(0, 140), messageCount: s.messages.length, updatedAt: Date.now(), contextUsed: s.started ? 18_400 : undefined, contextWindow: s.started ? 200_000 : undefined }
+    return { id: s.id, title: s.title, provider: s.provider, modelID: s.modelID, modelKey: s.modelID, effort: efforts.get(s.id), effortChoices: ['low', 'medium', 'high', 'xhigh', 'max'], remoteShort: s.started ? s.id.slice(0, 8) : undefined, state, latestReplyID: [...s.messages].reverse().find(m => m.role === 'assistant' && m.state === 'complete' && m.text)?.id, preview: (last?.text ?? s.messages.at(-1)?.text ?? '').slice(0, 140), messageCount: s.messages.length, updatedAt: Date.now(), contextUsed: s.started ? 18_400 : undefined, contextWindow: s.started ? 200_000 : undefined, rules: s.rules }
   }
   const boardNow = () => boards.find(x => x.id === current)!
   const push = (extra: Partial<StatePayload> = {}) => emit({
@@ -203,7 +203,8 @@ export function createMockHost(emit: (p: Incoming) => void) {
           const reply = e.sourceMessageID ? s.messages.find(m => m.id === e.sourceMessageID) : [...s.messages].reverse().find(m => m.role === 'assistant' && m.state === 'complete')
           return reply ? `--- 来自「${s.title}」---\n${reply.text}` : ''
         }).filter(Boolean)
-        emit({ type: 'context.preview', id: c.id, nodeID: c.nodeID, text: [...inputs, '[本轮用户消息]\n' + (c.text || '（在输入框中填写本轮问题）')].join('\n\n'), notes: ['浏览器预览：示例内容，不调用模型。正式应用复用实际发送时的上下文与附件文字组装。'] }); return
+        emit({ type: 'context.preview', id: c.id, nodeID: c.nodeID, text: [...inputs, '[本轮用户消息]\n' + (c.text || '（在输入框中填写本轮问题）')].join('\n\n'), notes: ['浏览器预览：示例内容，不调用模型。正式应用复用实际发送时的上下文与附件文字组装。'],
+          ...mockRules(sessions.get(node.sessionID)) }); return
       }
       case 'node.quote': {
         const parent = nodeOf(c.boardID, c.nodeID)!
@@ -260,6 +261,7 @@ export function createMockHost(emit: (p: Incoming) => void) {
         return
       }
       case 'node.rerun': case 'chain.downstream': case 'chain.stop': break
+      case 'session.setRules': { const s = sessions.get(c.sessionID); if (s) s.rules = c.text.trim() || undefined; break }
       case 'session.setModel': { const s = sessions.get(c.sessionID); if (s) s.modelID = c.modelID; break }
       case 'session.setEffort': if (c.effort) efforts.set(c.sessionID, c.effort); else efforts.delete(c.sessionID); break
       case 'provider.refresh': break
@@ -292,4 +294,16 @@ export function createMockHost(emit: (p: Incoming) => void) {
     }
     push()
   }
+}
+
+/** Browser preview of the rule sources: a sample global rule plus the node's own. */
+function mockRules(s?: MockSession): Pick<ContextPreview, 'rules' | 'rulesText' | 'rulesChannel'> {
+  const global = '回答用中文；改代码前先说明计划。'
+  const rules: RuleSourcePayload[] = [
+    { title: 'AgentDesk 全局规则', characters: global.length, delivery: 'injected' },
+    { title: '项目规则', characters: 420, delivery: 'native', path: '~/AgentDesk Projects/示例/AGENTS.md', note: '示例：由 CLI 自己读取' },
+  ]
+  const blocks = [`## AgentDesk 全局规则\n\n${global}`]
+  if (s?.rules) { rules.push({ title: '本节点规则', characters: s.rules.length, delivery: 'injected' }); blocks.push(`## 本节点规则\n\n${s.rules}`) }
+  return { rules, rulesText: '以下规则由 AgentDesk 提供，越靠后的优先级越高。\n\n' + blocks.join('\n\n'), rulesChannel: '浏览器预览' }
 }
