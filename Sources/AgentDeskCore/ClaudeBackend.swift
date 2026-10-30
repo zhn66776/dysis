@@ -24,7 +24,7 @@ public struct ClaudeBackend: AgentBackend, Sendable {
                     // A files call can wait for the user's answer (FolderAccessServer.timeout).
                     if !request.mcpServers.isEmpty { environment["MCP_TOOL_TIMEOUT"] = String(FolderAccessPolicy.toolTimeoutSeconds * 1000) }
 
-                    var arguments = try ClaudeBackend.commonArguments(modelID: request.modelID, effort: request.reasoningEffort, mcpServers: request.mcpServers)
+                    var arguments = try ClaudeBackend.commonArguments(modelID: request.modelID, effort: request.reasoningEffort, mcpServers: request.mcpServers, project: request.projectAccess)
                     arguments += try ClaudeBackend.sessionArguments(for: request)
                     let fork = request.remoteSessionID?.isEmpty == false ? nil : request.forkFrom
                     let imageContent = try MultimodalInputSupport.claudeContent(prompt: request.prompt, images: request.images)
@@ -175,8 +175,20 @@ public struct ClaudeBackend: AgentBackend, Sendable {
     }
 
     /// Built-in tools stay off. With MCP servers the model may call only their
-    /// tools (allowed per server), over a bounded number of turns.
-    static func commonArguments(modelID: String, effort: String?, mcpServers: [AgentMCPServer] = []) throws -> [String] {
+    /// tools (allowed per server), over a bounded number of turns. In a
+    /// trusted project folder (`project`) Claude Code works as it does in a
+    /// terminal there: all built-in tools, no permission prompts, the
+    /// project's and the user's settings loaded; MCP is still only ours.
+    static let maxProjectTurns = 100
+
+    static func commonArguments(modelID: String, effort: String?, mcpServers: [AgentMCPServer] = [], project: Bool = false) throws -> [String] {
+        if project {
+            var arguments = ["--strict-mcp-config", "--mcp-config", try mcpConfigJSON(mcpServers),
+                             "--permission-mode", "bypassPermissions", "--max-turns", String(maxProjectTurns), "--model", modelID,
+                             "--output-format", "stream-json", "--verbose", "--include-partial-messages"]
+            if let effort = try normalizedEffort(effort) { arguments += ["--effort", effort] }
+            return arguments
+        }
         let toolArguments = mcpServers.isEmpty
             ? ["--mcp-config", "{\"mcpServers\":{}}", "--tools", "", "--disallowedTools", "mcp__*"]
             : ["--mcp-config", try mcpConfigJSON(mcpServers), "--tools", "",
@@ -190,13 +202,16 @@ public struct ClaudeBackend: AgentBackend, Sendable {
             "--output-format", "stream-json", "--verbose",
             "--include-partial-messages"
         ]
-        if let rawEffort = effort, !rawEffort.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            guard let normalized = ReasoningEffortCatalog.normalized(rawEffort, choices: ReasoningEffortCatalog.claudeChoices) else {
-                throw AgentError.unavailable("Claude 推理深度无效。可选：\(ReasoningEffortCatalog.claudeChoices.joined(separator: ", "))。")
-            }
-            arguments += ["--effort", normalized]
-        }
+        if let effort = try normalizedEffort(effort) { arguments += ["--effort", effort] }
         return arguments
+    }
+
+    private static func normalizedEffort(_ raw: String?) throws -> String? {
+        guard let raw, !raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        guard let normalized = ReasoningEffortCatalog.normalized(raw, choices: ReasoningEffortCatalog.claudeChoices) else {
+            throw AgentError.unavailable("Claude 推理深度无效。可选：\(ReasoningEffortCatalog.claudeChoices.joined(separator: ", "))。")
+        }
+        return normalized
     }
 
     /// Model turns one send may take when it calls MCP tools.
@@ -275,7 +290,7 @@ public enum ClaudeJSONEventParser {
         }
         if type == "assistant", let message = object["message"] as? [String: Any], let content = message["content"] as? [[String: Any]] {
             let tools = content.filter { $0["type"] as? String == "tool_use" }.compactMap { $0["name"] as? String }
-            if let name = tools.last { event.status = "正在调用 MCP 工具 \(MCPToolName.display(name))…" }
+            if let name = tools.last { event.status = name.hasPrefix("mcp__") ? "正在调用 MCP 工具 \(MCPToolName.display(name))…" : "正在使用 \(name)…" }
         }
         if type == "stream_event", let nested = object["event"] as? [String: Any], let nestedType = nested["type"] as? String {
             if nestedType == "content_block_delta", let delta = nested["delta"] as? [String: Any], delta["type"] as? String == "text_delta" {

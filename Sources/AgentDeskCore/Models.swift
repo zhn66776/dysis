@@ -144,8 +144,16 @@ public struct AgentRequest: Sendable {
     /// MCP servers the model may call itself this turn. Empty keeps the
     /// provider tool-free.
     public let mcpServers: [AgentMCPServer]
-    public init(localSessionID: UUID, remoteSessionID: String?, prompt: String, workingDirectory: URL, modelID: String, executableURL: URL, reasoningEffort: String? = nil, images: [AgentImageInput] = [], forkFrom: AgentFork? = nil, mcpServers: [AgentMCPServer] = []) {
+    /// The working directory is a project folder the user trusted: the
+    /// provider may write files and run commands (with network) there.
+    public let projectAccess: Bool
+    /// The working directory is the user's own folder (a project), not a
+    /// workspace AgentDesk made: files there that AgentDesk did not write are left alone.
+    public let userFolder: Bool
+    public init(localSessionID: UUID, remoteSessionID: String?, prompt: String, workingDirectory: URL, modelID: String, executableURL: URL, reasoningEffort: String? = nil, images: [AgentImageInput] = [], forkFrom: AgentFork? = nil, mcpServers: [AgentMCPServer] = [], projectAccess: Bool = false, userFolder: Bool = false) {
         self.mcpServers = mcpServers
+        self.projectAccess = projectAccess
+        self.userFolder = userFolder || projectAccess
         self.localSessionID = localSessionID; self.remoteSessionID = remoteSessionID; self.prompt = prompt; self.workingDirectory = workingDirectory; self.modelID = modelID; self.executableURL = executableURL
         self.reasoningEffort = reasoningEffort
         self.images = images

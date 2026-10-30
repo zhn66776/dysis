@@ -65,6 +65,13 @@ input, textarea { font: inherit; color: var(--tx); }
 .board-list { display: flex; flex-direction: column; gap: 1px; overflow-y: auto; }
 .board-title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .count { font-size: 11px; color: var(--mu2); font-family: var(--meta); }
+.board-folder { display: block; font-size: 10.5px; color: var(--mu2); font-family: var(--meta); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.project-row { padding: 2px 8px 8px 8px; font-size: 11px; color: var(--mu); }
+.project-status { margin-bottom: 3px; }
+.project-status.trusted { color: var(--tx); }
+.project-actions { display: flex; gap: 10px; flex-wrap: wrap; }
+.project-row .link { border: 0; background: transparent; padding: 0; color: var(--mu); font-size: 11px; text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
+.project-row .link:hover { color: var(--tx); }
 .del { border: 0; background: transparent; color: var(--mu); padding: 0 2px; visibility: hidden; }
 .board:hover .del { visibility: visible; }
 .board:hover .count { display: none; }

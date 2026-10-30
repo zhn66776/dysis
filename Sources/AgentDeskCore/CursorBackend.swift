@@ -27,11 +27,17 @@ public struct CursorBackend: AgentBackend, Sendable {
                     // stores the exact discovered model ID (for example
                     // grok-4.7-high or gemini-4-argon-high).
                     let cursorModelID = request.modelID
-                    try CursorBackend.writeMCPConfig(request.mcpServers, workspace: request.workingDirectory)
+                    let skipped = try CursorBackend.writeMCPConfig(request.mcpServers, workspace: request.workingDirectory,
+                                                                   userFolder: request.userFolder, project: request.projectAccess)
+                    if !skipped.isEmpty {
+                        continuation.yield(.status("项目里已有自己的 .cursor/\(skipped.joined(separator: "、"))，AgentDesk 没有改它；这一轮的 MCP 设置以它为准。"))
+                    }
                     for server in request.mcpServers { environment.merge(server.environment) { $1 } }
-                    var arguments = [
-                        "--print", "--model", cursorModelID,
-                        "--mode", "ask", "--sandbox", "enabled", "--trust",
+                    // A trusted project runs in agent mode: edits and commands
+                    // (with network) without asking, as in a terminal there.
+                    let mode = request.projectAccess ? ["--force", "--sandbox", "disabled"] : ["--mode", "ask", "--sandbox", "enabled"]
+                    var arguments = ["--print", "--model", cursorModelID] + mode + [
+                        "--trust",
                         "--workspace", request.workingDirectory.path,
                         "--output-format", "stream-json", "--stream-partial-output"
                     ]
@@ -40,7 +46,7 @@ public struct CursorBackend: AgentBackend, Sendable {
                     if let remoteID = request.remoteSessionID, !remoteID.isEmpty {
                         arguments += ["--resume", remoteID]
                     }
-                    arguments += [CursorBackend.prompt(request.prompt, mcpServers: allowedMCP)]
+                    arguments += [request.projectAccess ? request.prompt : CursorBackend.prompt(request.prompt, mcpServers: allowedMCP)]
                     let process = CLIProcess(
                         executable: request.executableURL,
                         arguments: arguments,
@@ -74,7 +80,9 @@ public struct CursorBackend: AgentBackend, Sendable {
                             }
                             if let status = parsed.status, !status.isEmpty { continuation.yield(.status(status)) }
                             if parsed.isFailure { throw AgentError.protocolFailure(SafeText.redact(parsed.failureMessage ?? "Cursor CLI 返回失败结果。")) }
-                            if let call = parsed.mcpToolCall, CursorBackend.allows(call.server, among: allowedMCP) {
+                            if request.projectAccess {
+                                if parsed.isToolCallStart, let status = parsed.projectStatus { continuation.yield(.status(status)) }
+                            } else if let call = parsed.mcpToolCall, CursorBackend.allows(call.server, among: allowedMCP) {
                                 if parsed.isToolCallStart, let tool = call.tool { continuation.yield(.status("正在调用 MCP 工具 \(call.server ?? "MCP") · \(tool)…")) }
                             } else if parsed.hasToolCall, !allowedMCP.isEmpty, !parsed.builtInToolSucceeded {
                                 // Denied by the workspace permissions; the model gets the error and goes on.
@@ -113,12 +121,34 @@ public struct CursorBackend: AgentBackend, Sendable {
     /// explicitly, so `.cursor/cli.json` allows exactly these servers' tools
     /// (`Mcp(<name>:*)`) and denies the built-in file and shell tools, so a
     /// model that reaches for them gets "Permission denied" and carries on.
-    static func writeMCPConfig(_ servers: [AgentMCPServer], workspace: URL) throws {
-        let url = workspace.appendingPathComponent(".cursor/mcp.json")
-        let permissions = workspace.appendingPathComponent(".cursor/cli.json")
+    ///
+    /// In the user's own folder (`userFolder`) only files AgentDesk wrote
+    /// there before (listed in `.cursor/.agentdesk-managed`) are replaced or
+    /// removed; the names of files left alone are returned. A trusted
+    /// project (`project`) allows the servers without the deny list.
+    @discardableResult
+    static func writeMCPConfig(_ servers: [AgentMCPServer], workspace: URL, userFolder: Bool = false, project: Bool = false) throws -> [String] {
+        let directory = workspace.appendingPathComponent(".cursor", isDirectory: true)
+        let url = directory.appendingPathComponent("mcp.json")
+        let permissions = directory.appendingPathComponent("cli.json")
+        let marker = directory.appendingPathComponent(".agentdesk-managed")
+        var managed = Set((try? JSONDecoder().decode([String].self, from: Data(contentsOf: marker))) ?? [])
+        func mine(_ file: URL) -> Bool {
+            !userFolder || managed.contains(file.lastPathComponent) || !FileManager.default.fileExists(atPath: file.path)
+        }
+        let skipped = [url, permissions].filter { !mine($0) }.map(\.lastPathComponent)
+        defer {
+            if userFolder {
+                if managed.isEmpty { try? FileManager.default.removeItem(at: marker) }
+                else { try? JSONEncoder().encode(managed.sorted()).write(to: marker, options: .atomic) }
+            }
+        }
         guard !servers.isEmpty else {
-            for file in [url, permissions] where FileManager.default.fileExists(atPath: file.path) { try FileManager.default.removeItem(at: file) }
-            return
+            for file in [url, permissions] where FileManager.default.fileExists(atPath: file.path) && mine(file) {
+                try FileManager.default.removeItem(at: file)
+                managed.remove(file.lastPathComponent)
+            }
+            return skipped
         }
         var map: [String: Any] = [:]
         for server in servers {
@@ -127,10 +157,17 @@ public struct CursorBackend: AgentBackend, Sendable {
             case .streamableHTTP(let address): map[server.name] = ["url": address]
             }
         }
-        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try JSONSerialization.data(withJSONObject: ["mcpServers": map], options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]).write(to: url, options: .atomic)
-        let allow = servers.map { "Mcp(\($0.name):*)" }
-        try JSONSerialization.data(withJSONObject: ["permissions": ["allow": allow, "deny": deniedBuiltInTools]], options: [.prettyPrinted, .sortedKeys]).write(to: permissions, options: .atomic)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        if mine(url) {
+            try JSONSerialization.data(withJSONObject: ["mcpServers": map], options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]).write(to: url, options: .atomic)
+            managed.insert(url.lastPathComponent)
+        }
+        if mine(permissions) {
+            let allow = servers.map { "Mcp(\($0.name):*)" }
+            try JSONSerialization.data(withJSONObject: ["permissions": ["allow": allow, "deny": project ? [] : deniedBuiltInTools]], options: [.prettyPrinted, .sortedKeys]).write(to: permissions, options: .atomic)
+            managed.insert(permissions.lastPathComponent)
+        }
+        return skipped
     }
 
     /// Cursor has no system prompt flag; a short note ahead of the user's
@@ -195,6 +232,18 @@ public struct CursorJSONEvent: Equatable, Sendable {
     public var builtInToolSucceeded = false
     /// The non-MCP tool's name, e.g. "read" for `readToolCall`.
     public var builtInTool: String?
+
+    /// What a trusted project's tool call shows while it runs.
+    public var projectStatus: String? {
+        if let call = mcpToolCall { return call.tool.map { "正在调用 MCP 工具 \(call.server ?? "MCP") · \($0)…" } }
+        switch builtInTool {
+        case "shell": return "正在运行命令…"
+        case "edit", "write", "delete": return "正在修改文件…"
+        case "read", "glob", "grep", "ls": return "正在查看项目文件…"
+        case let name?: return "正在使用 \(name)…"
+        case nil: return nil
+        }
+    }
 }
 
 public struct CursorMCPCall: Equatable, Sendable {

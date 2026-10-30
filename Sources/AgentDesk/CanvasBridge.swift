@@ -8,7 +8,11 @@ import AgentDeskCore
 // and sends typed commands; every decision about sessions, files and model
 // turns stays on this side.
 
-struct BridgeBoardSummary: Encodable, Equatable { let id: UUID; let title: String; let nodeCount: Int }
+struct BridgeBoardSummary: Encodable, Equatable {
+    struct Project: Encodable, Equatable { let path: String; let name: String; let trusted: Bool?; let missing: Bool }
+    let id: UUID; let title: String; let nodeCount: Int
+    let project: Project?
+}
 
 struct BridgeNode: Encodable, Equatable {
     struct Inherited: Encodable, Equatable {
@@ -322,9 +326,19 @@ final class CanvasBridge: NSObject, ObservableObject, WKScriptMessageHandler {
         case "board.rename": if let id = c.boardID, let title = c.title { canvas.renameBoard(id, title: title) }
         case "board.delete":
             guard let id = c.boardID, let board = canvas.library.boards.first(where: { $0.id == id }) else { return }
-            confirm(title: "删除画布「\(board.title)」？", detail: "画布上的 \(board.nodes.count) 个对话的本地记录也会删除。官方 CLI 中的历史和工作目录文件不受影响。", action: "删除画布") { [canvas] in
+            let folder = board.project.map { "项目文件夹 \(NSString(string: $0.path).abbreviatingWithTildeInPath) 和里面的文件保留，不会删除。" } ?? "官方 CLI 中的历史和工作目录文件不受影响。"
+            confirm(title: "删除画布「\(board.title)」？", detail: "画布上的 \(board.nodes.count) 个对话的本地记录也会删除。\(folder)", action: "删除画布") { [canvas] in
                 canvas.deleteBoard(id)
             }
+        case "board.linkFolder": if let id = c.boardID { canvas.linkFolder(id) }
+        case "board.trust":
+            guard let id = c.boardID, let trusted = c.ok else { return }
+            if trusted, let project = canvas.library.boards.first(where: { $0.id == id })?.project {
+                Task { @MainActor [canvas] in if await ProjectDialogs.askTrust(project) { canvas.setTrust(id, trusted: true) } }
+            } else { canvas.setTrust(id, trusted: false) }
+        case "board.reveal":
+            guard let id = c.boardID, let path = canvas.library.boards.first(where: { $0.id == id })?.project?.path else { return }
+            NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
         case "node.create":
             guard let id = c.boardID, let provider = c.provider, let x = c.x, let y = c.y else { return }
             canvas.createNode(boardID: id, provider: provider, at: CanvasPoint(x: x, y: y), connectFrom: c.connectFrom)
@@ -566,7 +580,11 @@ final class CanvasBridge: NSObject, ObservableObject, WKScriptMessageHandler {
             sentModels = nil; sentQuotas = nil; sentDrafts = [:]
         }
 
-        let boards = canvas.library.boards.map { BridgeBoardSummary(id: $0.id, title: $0.title, nodeCount: $0.nodes.count) }
+        let boards = canvas.library.boards.map { b in
+            BridgeBoardSummary(id: b.id, title: b.title, nodeCount: b.nodes.count, project: b.project.map {
+                .init(path: NSString(string: $0.path).abbreviatingWithTildeInPath, name: $0.name, trusted: $0.trusted, missing: !FileManager.default.fileExists(atPath: $0.path))
+            })
+        }
         if boards != sentBoards { state.boards = boards; sentBoards = boards }
         if let current = canvas.currentBoard {
             let board = BridgeEncoding.board(current, sessions: sessions, running: app.runningSessionIDs, history: canvas.historyStatus(boardID: current.id), importing: canvas.importingSources)

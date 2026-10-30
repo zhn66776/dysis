@@ -71,11 +71,11 @@ final class AppModel: ObservableObject {
     }
 
     @discardableResult
-    func newSession(provider: ProviderID, copyingSettingsFrom source: ChatSession? = nil) -> UUID? {
+    func newSession(provider: ProviderID, copyingSettingsFrom source: ChatSession? = nil, workingDirectory: URL? = nil) -> UUID? {
         guard storageReadable, let store else { return nil }
         do {
             let id = UUID()
-            let directory = try store.makeWorkspace(for: id)
+            let directory = try workingDirectory ?? store.makeWorkspace(for: id)
             let session = ChatSession(id: id, provider: provider, modelID: source?.modelID ?? configuration[provider].modelID, workingDirectory: directory.path, reasoningEffort: source == nil ? configuration[provider].reasoningEffort : source?.reasoningEffort)
             sessions.insert(session, at: 0)
             selectedSessionID = id
@@ -173,7 +173,8 @@ final class AppModel: ObservableObject {
     /// `fork` makes a not-yet-started session fork natively from its parent.
     /// Returns whether the turn started.
     @discardableResult
-    func send(_ text: String, to id: UUID, context: CanvasPromptContext = .init()) -> Bool {
+    /// `project` is the board's folder: once trusted, the provider may write and run commands there.
+    func send(_ text: String, to id: UUID, context: CanvasPromptContext = .init(), project: CanvasProject? = nil) -> Bool {
         guard storageReadable,
               let index = sessions.firstIndex(where: { $0.id == id }), !runningSessionIDs.contains(id) else { return false }
         guard !attachmentDrafts.importing.contains(id) else { return false }
@@ -212,7 +213,9 @@ final class AppModel: ObservableObject {
         sessions[index].messages.append(ChatMessage(id: assistantID, role: .assistant, text: "", state: .streaming))
         sessions[index].updatedAt = Date()
         let session = sessions[index]
-        let request = AgentRequest(localSessionID: id, remoteSessionID: session.remoteSessionID, prompt: input, workingDirectory: URL(fileURLWithPath: session.workingDirectory), modelID: session.modelID, executableURL: executable, reasoningEffort: session.reasoningEffort, images: images, forkFrom: session.remoteSessionID == nil ? context.fork : nil, mcpServers: modelMCPServers(sessionID: id))
+        let request = AgentRequest(localSessionID: id, remoteSessionID: session.remoteSessionID, prompt: input, workingDirectory: URL(fileURLWithPath: session.workingDirectory), modelID: session.modelID, executableURL: executable, reasoningEffort: session.reasoningEffort, images: images, forkFrom: session.remoteSessionID == nil ? context.fork : nil, mcpServers: modelMCPServers(sessionID: id),
+                                   projectAccess: project?.isTrusted == true && project?.path == session.workingDirectory,
+                                   userFolder: !URL(fileURLWithPath: session.workingDirectory).path.hasPrefix(dataRoot.path + "/"))
         let backend: any AgentBackend
         switch provider {
         case .claude: backend = ClaudeBackend()

@@ -1,6 +1,30 @@
 import { useState } from 'react'
 import { send } from './bridge'
-import type { AppState } from './types'
+import { projectStatus } from './projects'
+import type { AppState, BoardSummary } from './types'
+
+/** Folder actions under the selected board. */
+function ProjectRow({ board }: { board: BoardSummary }) {
+  const p = board.project
+  if (!p) {
+    return (
+      <div className="project-row">
+        <button className="link" onClick={e => { e.stopPropagation(); send({ type: 'board.linkFolder', boardID: board.id }) }}>关联文件夹…</button>
+      </div>
+    )
+  }
+  return (
+    <div className="project-row" title={p.path}>
+      <div className={`project-status${p.trusted === true && !p.missing ? ' trusted' : ''}`}>{projectStatus(p)}</div>
+      <div className="project-actions">
+        <button className="link" onClick={e => { e.stopPropagation(); send({ type: 'board.reveal', boardID: board.id }) }}>在访达中显示</button>
+        {p.trusted === true
+          ? <button className="link" onClick={e => { e.stopPropagation(); send({ type: 'board.trust', boardID: board.id, ok: false }) }}>取消信任</button>
+          : <button className="link" onClick={e => { e.stopPropagation(); send({ type: 'board.trust', boardID: board.id, ok: true }) }}>信任…</button>}
+      </div>
+    </div>
+  )
+}
 
 export function Sidebar({ state, collapsed, onToggle }: { state: AppState; collapsed: boolean; onToggle(): void }) {
   const [renaming, setRenaming] = useState<string | null>(null)
@@ -25,7 +49,8 @@ export function Sidebar({ state, collapsed, onToggle }: { state: AppState; colla
       <div className="side-label">画布</div>
       <div className="board-list">
         {state.boards.map(b => (
-          <div key={b.id} className={`side-item board${b.id === state.board?.id ? ' on' : ''}`} onClick={() => send({ type: 'board.select', boardID: b.id })} onDoubleClick={() => setRenaming(b.id)}>
+          <div key={b.id}>
+          <div className={`side-item board${b.id === state.board?.id ? ' on' : ''}`} onClick={() => send({ type: 'board.select', boardID: b.id })} onDoubleClick={() => setRenaming(b.id)}>
             {renaming === b.id ? (
               <input
                 className="rename" autoFocus defaultValue={b.title} onClick={e => e.stopPropagation()}
@@ -34,11 +59,13 @@ export function Sidebar({ state, collapsed, onToggle }: { state: AppState; colla
               />
             ) : (
               <>
-                <span className="board-title">{b.title}</span>
+                <span className="board-title">{b.title}{b.project && <span className="board-folder" title={b.project.path}>{b.project.path}</span>}</span>
                 <span className="count">{b.nodeCount}</span>
                 <button className="del" aria-label={`删除画布 ${b.title}`} onClick={e => { e.stopPropagation(); send({ type: 'board.delete', boardID: b.id }) }}>✕</button>
               </>
             )}
+          </div>
+          {b.id === state.board?.id && <ProjectRow board={b} />}
           </div>
         ))}
       </div>

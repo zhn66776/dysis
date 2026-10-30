@@ -1,0 +1,67 @@
+import AppKit
+import AgentDeskCore
+
+/// Native dialogs for project boards, shown as sheets on the front window.
+@MainActor
+enum ProjectDialogs {
+    enum NewBoard { case plain, newFolder(String), existing(URL) }
+
+    /// How a new board starts; nil when cancelled.
+    static func newBoard() async -> NewBoard? {
+        let alert = NSAlert()
+        alert.messageText = "新建画布"
+        alert.informativeText = "项目画布对应你电脑上的一个文件夹，画布里的对话都在这个文件夹里工作。新文件夹建在 \(abbreviated(CanvasProject.defaultRoot.path)) 里。"
+        let field = NSTextField(string: "新项目")
+        field.frame = NSRect(x: 0, y: 0, width: 280, height: 24)
+        field.placeholderString = "项目名"
+        alert.accessoryView = field
+        alert.addButton(withTitle: "新建项目文件夹")
+        alert.addButton(withTitle: "打开已有文件夹…")
+        alert.addButton(withTitle: "只建画布")
+        alert.addButton(withTitle: "取消")
+        alert.window.initialFirstResponder = field
+        switch await present(alert) {
+        case .alertFirstButtonReturn: return .newFolder(field.stringValue)
+        case .alertSecondButtonReturn: return chooseFolder().map(NewBoard.existing)
+        case .alertThirdButtonReturn: return .plain
+        default: return nil
+        }
+    }
+
+    static func chooseFolder() -> URL? {
+        let panel = NSOpenPanel()
+        panel.title = "选择项目文件夹"
+        panel.prompt = "打开"
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.canCreateDirectories = true
+        panel.allowsMultipleSelection = false
+        return panel.runModal() == .OK ? panel.url : nil
+    }
+
+    /// Asked once per project, before its first conversation.
+    static func askTrust(_ project: CanvasProject) async -> Bool {
+        let alert = NSAlert()
+        alert.messageText = "信任「\(project.name)」这个文件夹吗？"
+        alert.informativeText = """
+        \(abbreviated(project.path))
+
+        信任后，这个画布里所有对话的 Claude、ChatGPT、Grok、Gemini 都可以在这个文件夹里新建、修改、删除文件，并运行命令（可以联网），不再逐个询问。只信任你自己的项目。
+
+        不信任时只能聊天；以后可以在侧栏里改。
+        """
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "信任这个文件夹")
+        alert.addButton(withTitle: "只聊天")
+        return await present(alert) == .alertFirstButtonReturn
+    }
+
+    private static func present(_ alert: NSAlert) async -> NSApplication.ModalResponse {
+        guard let window = NSApp.keyWindow ?? NSApp.mainWindow else { return alert.runModal() }
+        return await withCheckedContinuation { continuation in
+            alert.beginSheetModal(for: window) { continuation.resume(returning: $0) }
+        }
+    }
+
+    static func abbreviated(_ path: String) -> String { NSString(string: path).abbreviatingWithTildeInPath }
+}

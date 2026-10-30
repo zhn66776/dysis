@@ -203,7 +203,7 @@ public final class CodexBackend: AgentBackend, @unchecked Sendable {
         let disabledMCPNames = try await Self.discoverConfiguredMCPNames(executableURL: executableURL, directory: request.workingDirectory)
         try Self.ensureMCPNamesCanBeDisabled(disabledMCPNames)
         let mcpServers = Self.codexMCPServers(request.mcpServers, avoiding: disabledMCPNames)
-        let process = processFactory(executableURL, try Self.appServerArguments(disabling: disabledMCPNames, providing: mcpServers), request.workingDirectory, environment)
+        let process = processFactory(executableURL, try Self.appServerArguments(disabling: disabledMCPNames, providing: mcpServers, project: request.projectAccess), request.workingDirectory, environment)
         try process.start()
         defer { process.terminate() }
 
@@ -251,7 +251,7 @@ public final class CodexBackend: AgentBackend, @unchecked Sendable {
 
                 if let method = object["method"] as? String, object["id"] != nil {
                     try answerServerRequest(method: method, id: object["id"]!, params: object["params"] as? [String: Any] ?? [:],
-                                            allowedMCPServers: Set(mcpServers.map(\.name)), process: process)
+                                            allowedMCPServers: Set(mcpServers.map(\.name)), project: request.projectAccess, process: process)
                     continue
                 }
 
@@ -321,16 +321,19 @@ public final class CodexBackend: AgentBackend, @unchecked Sendable {
                         // high/low override instead of resetting to default.
                         selectedReasoningEffort = officialDefault
                     }
+                    // A trusted project keeps Codex's own instructions.
+                    let instructions: String? = request.projectAccess ? nil : Self.baseInstructions(mcpServers: mcpServers)
+                    let sandboxMode = request.projectAccess ? "workspace-write" : "read-only"
                     if let existing = request.remoteSessionID, !existing.isEmpty {
                         var params: [String: Any] = [
                             "threadId": existing,
                             "cwd": request.workingDirectory.path,
                             "approvalPolicy": "never",
-                            "sandbox": "read-only",
-                            // Restated on resume: the thread keeps what it
-                            // started with, and the opened servers can change.
-                            "baseInstructions": Self.baseInstructions(mcpServers: mcpServers)
+                            "sandbox": sandboxMode
                         ]
+                        // Restated on resume: the thread keeps what it
+                        // started with, and the opened servers can change.
+                        if let instructions { params["baseInstructions"] = instructions }
                         if !request.modelID.isEmpty { params["model"] = request.modelID }
                         _ = try send("thread/resume", params: params, step: .thread)
                     } else if let fork = request.forkFrom {
@@ -340,10 +343,10 @@ public final class CodexBackend: AgentBackend, @unchecked Sendable {
                             "threadId": fork.remoteSessionID,
                             "cwd": request.workingDirectory.path,
                             "approvalPolicy": "never",
-                            "sandbox": "read-only",
-                            "baseInstructions": Self.baseInstructions(mcpServers: mcpServers),
+                            "sandbox": sandboxMode,
                             "excludeTurns": true
                         ]
+                        if let instructions { params["baseInstructions"] = instructions }
                         if let turn = fork.throughTurnID { params["lastTurnId"] = turn }
                         if !request.modelID.isEmpty { params["model"] = request.modelID }
                         _ = try send("thread/fork", params: params, step: .thread)
@@ -351,9 +354,9 @@ public final class CodexBackend: AgentBackend, @unchecked Sendable {
                         var params: [String: Any] = [
                             "cwd": request.workingDirectory.path,
                             "approvalPolicy": "never",
-                            "sandbox": "read-only",
-                            "baseInstructions": Self.baseInstructions(mcpServers: mcpServers)
+                            "sandbox": sandboxMode
                         ]
+                        if let instructions { params["baseInstructions"] = instructions }
                         if !request.modelID.isEmpty { params["model"] = request.modelID }
                         _ = try send("thread/start", params: params, step: .thread)
                     }
@@ -373,7 +376,9 @@ public final class CodexBackend: AgentBackend, @unchecked Sendable {
                         "input": imageInput,
                         "cwd": request.workingDirectory.path,
                         "approvalPolicy": "never",
-                        "sandboxPolicy": ["type": "readOnly", "networkAccess": false]
+                        "sandboxPolicy": request.projectAccess
+                            ? ["type": "workspaceWrite", "writableRoots": [request.workingDirectory.path], "networkAccess": true] as [String: Any]
+                            : ["type": "readOnly", "networkAccess": false]
                     ]
                     if !request.modelID.isEmpty { params["model"] = request.modelID }
                     // App-server documents `effort` as a per-turn override.
@@ -468,13 +473,18 @@ public final class CodexBackend: AgentBackend, @unchecked Sendable {
         }
     }
 
-    static func appServerArguments(disabling names: [String] = [], providing servers: [AgentMCPServer] = []) throws -> [String] {
+    /// In a trusted project folder (`project`) the shell stays on and the
+    /// sandbox lets the model write the workspace and use the network.
+    static func appServerArguments(disabling names: [String] = [], providing servers: [AgentMCPServer] = [], project: Bool = false) throws -> [String] {
         var args = ["app-server"]
-        let overrides = [
-            "model_provider=\"openai\"",
+        let shell = project ? [] : [
             "features.shell_tool=false",
             "features.unified_exec=false",
-            "features.unified_exec_tty=false",
+            "features.unified_exec_tty=false"]
+        let sandbox = project
+            ? ["sandbox_mode=\"workspace-write\"", "sandbox_workspace_write.network_access=true"]
+            : ["sandbox_mode=\"read-only\""]
+        let overrides = ["model_provider=\"openai\""] + shell + [
             // Even the advertised ultra effort must remain a single member
             // turn; provider-side delegation must not bypass the room budget.
             "features.multi_agent=false",
@@ -493,9 +503,8 @@ public final class CodexBackend: AgentBackend, @unchecked Sendable {
             // into an isolated conversation, and its consolidation thread
             // runs in the same app-server (it was seen stalling turns).
             "features.memories=false",
-            "approval_policy=\"never\"",
-            "sandbox_mode=\"read-only\""
-        ]
+            "approval_policy=\"never\""
+        ] + sandbox
         for override in overrides { args.append(contentsOf: ["-c", override]) }
         for name in names {
             // Codex's dotted -c parser treats quoted map keys as a new
@@ -569,6 +578,10 @@ public final class CodexBackend: AgentBackend, @unchecked Sendable {
             if let item = params["item"] as? [String: Any], item["type"] as? String == "mcpToolCall",
                let server = item["server"] as? String, let tool = item["tool"] as? String {
                 continuation.yield(.status("正在调用 MCP 工具 \(server) · \(tool)…"))
+            } else if let item = params["item"] as? [String: Any], item["type"] as? String == "commandExecution" {
+                continuation.yield(.status("正在运行命令 \(String((item["command"] as? String ?? "").prefix(80)))…"))
+            } else if let item = params["item"] as? [String: Any], item["type"] as? String == "fileChange" {
+                continuation.yield(.status("正在修改文件…"))
             }
         case "item/completed", "turn/started", "thread/status/changed":
             break
@@ -579,10 +592,13 @@ public final class CodexBackend: AgentBackend, @unchecked Sendable {
     }
 
     /// Everything is declined, except the approval a server the user opened
-    /// to the model asks for before one of its tool calls.
-    private func answerServerRequest(method: String, id: Any, params: [String: Any], allowedMCPServers: Set<String>, process: CLIProcess) throws {
+    /// to the model asks for before one of its tool calls, and, in a trusted
+    /// project, command and file-change approvals.
+    private func answerServerRequest(method: String, id: Any, params: [String: Any], allowedMCPServers: Set<String>, project: Bool, process: CLIProcess) throws {
         let response: [String: Any]
         switch method {
+        case _ where project && (method == "item/commandExecution/requestApproval" || method == "item/fileChange/requestApproval"):
+            response = ["id": id, "result": ["decision": "accept"]]
         case "mcpServer/elicitation/request" where Self.isToolCallApproval(params, allowed: allowedMCPServers):
             response = ["id": id, "result": ["action": "accept", "content": [String: Any](), "_meta": NSNull()]]
         case "item/commandExecution/requestApproval", "item/fileChange/requestApproval":
