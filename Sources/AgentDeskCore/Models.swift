@@ -66,7 +66,15 @@ public struct ProviderConfiguration: Codable, Equatable, Sendable {
 
 public struct AppConfiguration: Codable, Equatable, Sendable {
     public var providers: [ProviderID: ProviderConfiguration]
-    public init(providers: [ProviderID: ProviderConfiguration] = [:]) { self.providers = providers }
+    /// Private and canvas chats get AgentDesk's files MCP server, which asks
+    /// before reading each new folder.
+    public var folderAccess: Bool
+    public init(providers: [ProviderID: ProviderConfiguration] = [:], folderAccess: Bool = true) { self.providers = providers; self.folderAccess = folderAccess }
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        providers = try container.decode([ProviderID: ProviderConfiguration].self, forKey: .providers)
+        folderAccess = try container.decodeIfPresent(Bool.self, forKey: .folderAccess) ?? true
+    }
     public subscript(_ provider: ProviderID) -> ProviderConfiguration {
         get { providers[provider] ?? ProviderConfiguration() }
         set { providers[provider] = newValue }

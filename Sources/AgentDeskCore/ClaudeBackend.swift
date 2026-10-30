@@ -21,6 +21,8 @@ public struct ClaudeBackend: AgentBackend, Sendable {
                     try await ClaudeBackend.requireSubscription(request: request, environment: environment)
                     // stdio MCP servers inherit the CLI's environment.
                     for server in request.mcpServers { environment.merge(server.environment) { $1 } }
+                    // A files call can wait for the user's answer (FolderAccessServer.timeout).
+                    if !request.mcpServers.isEmpty { environment["MCP_TOOL_TIMEOUT"] = String(FolderAccessPolicy.toolTimeoutSeconds * 1000) }
 
                     var arguments = try ClaudeBackend.commonArguments(modelID: request.modelID, effort: request.reasoningEffort, mcpServers: request.mcpServers)
                     arguments += try ClaudeBackend.sessionArguments(for: request)

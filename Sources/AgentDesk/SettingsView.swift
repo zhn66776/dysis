@@ -33,6 +33,7 @@ struct SettingsView: View {
                     ForEach(ProviderID.allCases) { provider in
                         ProviderSettingsSection(model: model, provider: provider)
                     }
+                    FolderAccessSettings(model: model, center: model.folderAccess)
                     if model.developerModeEnabled { SecurityNote() }
                     HStack {
                         Text(model.developerModeEnabled ? "⌘⇧D Leave developer mode" : "⌘⇧D Developer mode")

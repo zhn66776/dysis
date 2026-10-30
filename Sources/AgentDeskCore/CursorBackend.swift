@@ -138,7 +138,10 @@ public struct CursorBackend: AgentBackend, Sendable {
     /// than searching the disk.
     static func prompt(_ text: String, mcpServers: [String]) -> String {
         guard !mcpServers.isEmpty else { return text }
-        return "[AgentDesk：本轮可以用这些 MCP 服务器的工具：\(mcpServers.joined(separator: "、"))。本地文件、文件搜索和命令都不可用，需要数据时调用这些 MCP 工具。]\n\n" + text
+        let files = mcpServers.contains(FolderAccessPolicy.serverName)
+            ? "读取本地文件只能用 \(FolderAccessPolicy.serverName) 的工具（每个新文件夹会先问用户）；内置的读文件、文件搜索和命令都不可用。"
+            : "本地文件、文件搜索和命令都不可用，需要数据时调用这些 MCP 工具。"
+        return "[AgentDesk：本轮可以用这些 MCP 服务器的工具：\(mcpServers.joined(separator: "、"))。\(files)]\n\n" + text
     }
 
     static let deniedBuiltInTools = ["Read(**)", "Write(**)", "Shell(*)"]
