@@ -152,6 +152,15 @@ public struct CanvasViewport: Codable, Equatable, Sendable {
     public init(x: Double, y: Double, zoom: Double) { self.x = x; self.y = y; self.zoom = zoom }
 }
 
+public struct CanvasGroup: Identifiable, Codable, Equatable, Sendable {
+    public var id: UUID
+    public var title: String
+    public var nodeIDs: [UUID]
+    public init(id: UUID = UUID(), title: String, nodeIDs: [UUID]) {
+        self.id = id; self.title = title; self.nodeIDs = nodeIDs
+    }
+}
+
 public enum CanvasError: LocalizedError, Equatable, Sendable {
     case unknownNode, selfLoop, duplicateEdge, cycle, alreadyInherits, sourceIsTarget, sourceIsParent
 
@@ -173,13 +182,49 @@ public struct CanvasBoard: Identifiable, Codable, Equatable, Sendable {
     public var title: String
     public var nodes: [CanvasNode]
     public var edges: [CanvasEdge]
+    public var groups: [CanvasGroup]
     public var viewport: CanvasViewport?
     public var createdAt: Date
     public var updatedAt: Date
 
-    public init(id: UUID = UUID(), title: String, nodes: [CanvasNode] = [], edges: [CanvasEdge] = [], viewport: CanvasViewport? = nil, createdAt: Date = Date(), updatedAt: Date = Date()) {
+    public init(id: UUID = UUID(), title: String, nodes: [CanvasNode] = [], edges: [CanvasEdge] = [], groups: [CanvasGroup] = [], viewport: CanvasViewport? = nil, createdAt: Date = Date(), updatedAt: Date = Date()) {
         self.id = id; self.title = title; self.nodes = nodes; self.edges = edges; self.viewport = viewport
+        self.groups = groups
         self.createdAt = createdAt; self.updatedAt = updatedAt
+    }
+
+    private enum CodingKeys: String, CodingKey { case id, title, nodes, edges, groups, viewport, createdAt, updatedAt }
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(id: try c.decode(UUID.self, forKey: .id), title: try c.decode(String.self, forKey: .title),
+                  nodes: try c.decode([CanvasNode].self, forKey: .nodes), edges: try c.decode([CanvasEdge].self, forKey: .edges),
+                  groups: try c.decodeIfPresent([CanvasGroup].self, forKey: .groups) ?? [],
+                  viewport: try c.decodeIfPresent(CanvasViewport.self, forKey: .viewport),
+                  createdAt: try c.decode(Date.self, forKey: .createdAt), updatedAt: try c.decode(Date.self, forKey: .updatedAt))
+        normalizeGroups()
+    }
+
+    /// Groups are visual containers with one membership per node and no nesting.
+    public mutating func normalizeGroups() {
+        let valid = Set(nodes.map(\.id))
+        var assigned = Set<UUID>()
+        for i in groups.indices {
+            groups[i].nodeIDs = groups[i].nodeIDs.filter { valid.contains($0) && assigned.insert($0).inserted }
+        }
+        groups.removeAll { $0.nodeIDs.isEmpty }
+    }
+
+    @discardableResult
+    public mutating func group(nodeIDs: Set<UUID>, into groupID: UUID? = nil, title: String = "新分组") -> UUID? {
+        let members = nodes.filter { nodeIDs.contains($0.id) }.map(\.id)
+        guard !members.isEmpty else { return nil }
+        if let groupID, !groups.contains(where: { $0.id == groupID }) { return nil }
+        for i in groups.indices { groups[i].nodeIDs.removeAll { nodeIDs.contains($0) } }
+        let id = groupID ?? UUID()
+        if let i = groups.firstIndex(where: { $0.id == id }) { groups[i].nodeIDs += members }
+        else { groups.append(.init(id: id, title: title, nodeIDs: members)) }
+        normalizeGroups()
+        return id
     }
 
     public func node(_ id: UUID) -> CanvasNode? { nodes.first { $0.id == id } }
@@ -216,6 +261,7 @@ public struct CanvasBoard: Identifiable, Codable, Equatable, Sendable {
     public mutating func removeNodes(_ ids: Set<UUID>) {
         nodes.removeAll { ids.contains($0.id) }
         edges.removeAll { ids.contains($0.source) || ids.contains($0.target) }
+        normalizeGroups()
         updatedAt = Date()
     }
 

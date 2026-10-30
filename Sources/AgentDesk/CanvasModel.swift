@@ -9,6 +9,8 @@ final class CanvasModel: ObservableObject {
     @Published private(set) var library = CanvasLibrary()
     /// Set after create/branch so the page opens the new node's panel.
     @Published var focusNodeID: UUID?
+    @Published var fitBoardID: UUID?
+    private var histories: [UUID: CanvasEditHistory] = [:]
     /// Text to put into a session's composer once (merge templates).
     @Published var composerFill: (sessionID: UUID, text: String)?
     /// A downstream re-run in progress: nodes in order and the current index.
@@ -46,7 +48,12 @@ final class CanvasModel: ObservableObject {
             .receive(on: DispatchQueue.main)
             .sink { [weak self] ids in
                 guard let self else { return }
-                if self.library.reconcile(sessionIDs: ids) { self.persist() }
+                let before = Dictionary(uniqueKeysWithValues: self.library.boards.map { ($0.id, $0.nodes.map(\.id)) })
+                if self.library.reconcile(sessionIDs: ids) {
+                    let unchanged = Set(self.library.boards.filter { before[$0.id] == $0.nodes.map(\.id) }.map(\.id))
+                    self.histories = self.histories.filter { unchanged.contains($0.key) }
+                    self.persist()
+                }
             }
         runningWatch = app.$runningSessionIDs
             .receive(on: DispatchQueue.main)
@@ -68,9 +75,13 @@ final class CanvasModel: ObservableObject {
     var currentBoard: CanvasBoard? { library.boards.first { $0.id == library.selectedBoardID } }
     var sessionsByID: [UUID: ChatSession] { Dictionary(uniqueKeysWithValues: app.sessions.map { ($0.id, $0) }) }
 
-    private func update(_ boardID: UUID, _ change: (inout CanvasBoard) throws -> Void) rethrows {
+    private func update(_ boardID: UUID, undoLabel: String? = nil, _ change: (inout CanvasBoard) throws -> Void) rethrows {
         guard let i = library.boards.firstIndex(where: { $0.id == boardID }) else { return }
+        let before = library.boards[i]
         try change(&library.boards[i])
+        guard before != library.boards[i] else { return }
+        if before.nodes.map(\.id) != library.boards[i].nodes.map(\.id) { histories[boardID] = nil }
+        else if let label = undoLabel { histories[boardID, default: CanvasEditHistory()].record(before: before, after: library.boards[i], label: label) }
         library.boards[i].updatedAt = Date()
         persist()
     }
@@ -101,6 +112,7 @@ final class CanvasModel: ObservableObject {
     func deleteBoard(_ id: UUID) {
         guard let board = library.boards.first(where: { $0.id == id }) else { return }
         library.boards.removeAll { $0.id == id }
+        histories[id] = nil
         if library.boards.isEmpty { library.boards = [CanvasBoard(title: "我的画布")] }
         if library.selectedBoardID == id { library.selectedBoardID = library.boards[0].id }
         persist()
@@ -128,8 +140,8 @@ final class CanvasModel: ObservableObject {
     }
 
     func moveNodes(boardID: UUID, positions: [UUID: CanvasPoint]) {
-        update(boardID) { board in
-            for i in board.nodes.indices { if let p = positions[board.nodes[i].id] { board.nodes[i].position = p } }
+        update(boardID, undoLabel: "移动节点") { board in
+            for i in board.nodes.indices { if let p = positions[board.nodes[i].id], p.x.isFinite, p.y.isFinite { board.nodes[i].position = p } }
         }
     }
 
@@ -141,12 +153,50 @@ final class CanvasModel: ObservableObject {
     }
 
     func connect(boardID: UUID, source: UUID, target: UUID) {
-        do { try update(boardID) { try $0.connect(source: source, target: target) } }
+        do { try update(boardID, undoLabel: "添加连线") { try $0.connect(source: source, target: target) } }
         catch { app.errorMessage = error.localizedDescription }
     }
 
     func deleteEdges(boardID: UUID, edgeIDs: Set<UUID>) {
-        update(boardID) { $0.edges.removeAll { edgeIDs.contains($0.id) } }
+        update(boardID, undoLabel: "移除连线") { $0.edges.removeAll { edgeIDs.contains($0.id) } }
+    }
+
+    func historyStatus(boardID: UUID) -> CanvasHistoryStatus { histories[boardID]?.status ?? .init() }
+
+    func undo(boardID: UUID, redo: Bool = false) {
+        guard let i = library.boards.firstIndex(where: { $0.id == boardID }), var history = histories[boardID] else { return }
+        let changed = redo ? history.redo(&library.boards[i]) : history.undo(&library.boards[i])
+        guard changed else { return }
+        histories[boardID] = history
+        library.boards[i].updatedAt = Date()
+        persist()
+    }
+
+    func layout(boardID: UUID, sizes: [CanvasNodeSize]) {
+        update(boardID, undoLabel: "自动布局") { board in
+            let positions = CanvasLayout.positions(board: board, sizes: sizes)
+            for i in board.nodes.indices { if let p = positions[board.nodes[i].id] { board.nodes[i].position = p } }
+        }
+        fitBoardID = boardID
+    }
+
+    func group(boardID: UUID, nodeIDs: Set<UUID>, into groupID: UUID?) {
+        update(boardID, undoLabel: groupID == nil ? "创建分组" : "调整分组") { board in
+            board.group(nodeIDs: nodeIDs, into: groupID)
+        }
+        if groupID == nil { fitBoardID = boardID }
+    }
+
+    func renameGroup(boardID: UUID, groupID: UUID, title: String) {
+        let title = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !title.isEmpty else { return }
+        update(boardID, undoLabel: "分组改名") { board in
+            if let i = board.groups.firstIndex(where: { $0.id == groupID }) { board.groups[i].title = String(title.prefix(100)) }
+        }
+    }
+
+    func dissolveGroup(boardID: UUID, groupID: UUID) {
+        update(boardID, undoLabel: "解散分组") { $0.groups.removeAll { $0.id == groupID } }
     }
 
     /// New node of the same provider that inherits the parent's history up to

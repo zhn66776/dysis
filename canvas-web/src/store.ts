@@ -40,6 +40,7 @@ export function applyState(prev: AppState, p: StatePayload): AppState {
     running: new Set(p.running),
     error: p.error,
     focusNodeID: p.focusNodeID,
+    fitBoardID: p.fitBoardID,
     models: p.models ?? (p.reset ? {} : prev.models),
     quotas: p.quotas ?? (p.reset ? {} : prev.quotas),
     drafts,

@@ -54,7 +54,8 @@ struct BridgeChain: Encodable, Equatable {
 struct BridgeEdge: Encodable, Equatable { let id: UUID; let kind: CanvasEdgeKind; let source: UUID; let target: UUID; let pending: Bool?; let sourceMessageID: UUID? }
 
 struct BridgeBoard: Encodable, Equatable {
-    let id: UUID, title: String, nodes: [BridgeNode], edges: [BridgeEdge], viewport: CanvasViewport?
+    let id: UUID, title: String, nodes: [BridgeNode], edges: [BridgeEdge], groups: [CanvasGroup], viewport: CanvasViewport?
+    let history: CanvasHistoryStatus
 }
 
 struct BridgeSummary: Encodable, Equatable {
@@ -104,6 +105,7 @@ struct BridgeState: Encodable {
     var running: [UUID]
     var error: String
     var focusNodeID: UUID?
+    var fitBoardID: UUID?
 }
 
 struct BridgeCommand: Decodable {
@@ -111,7 +113,8 @@ struct BridgeCommand: Decodable {
     struct Rect: Decodable { let x: Double; let y: Double; let w: Double; let h: Double }
     let type: String
     var boardID: UUID?, nodeID: UUID?, sessionID: UUID?, messageID: UUID?
-    var source: UUID?, target: UUID?, connectFrom: UUID?, panelSessionID: UUID?
+    var source: UUID?, target: UUID?, connectFrom: UUID?, panelSessionID: UUID?, groupID: UUID?
+    var sizes: [CanvasNodeSize]?
     var nodeIDs: [UUID]?, edgeIDs: [UUID]?, sessionIDs: [UUID]?
     var positions: [Position]?
     var provider: ProviderID?
@@ -177,7 +180,7 @@ enum BridgeEncoding {
                       actualModels: m.actualModelIDs, attachments: m.attachments?.map(\.displayName), contextSources: m.contextSources)
     }
 
-    static func board(_ b: CanvasBoard, sessions: [UUID: ChatSession], running: Set<UUID>, importing: Set<UUID> = []) -> BridgeBoard {
+    static func board(_ b: CanvasBoard, sessions: [UUID: ChatSession], running: Set<UUID>, history: CanvasHistoryStatus, importing: Set<UUID> = []) -> BridgeBoard {
         let stale = CanvasContextBuilder.staleNodes(board: b, sessions: sessions, running: running)
         let ran = { (n: CanvasNode) in CanvasContextBuilder.hasRun(sessions[n.sessionID]) }
         let nodes = b.nodes.map { n -> BridgeNode in
@@ -199,7 +202,7 @@ enum BridgeEncoding {
         }
         let pending = b.nodes.reduce(into: Set<UUID>()) { $0.formUnion(CanvasContextBuilder.pendingEdges(board: b, nodeID: $1.id, sessions: sessions)) }
         let edges = b.edges.map { BridgeEdge(id: $0.id, kind: $0.kind, source: $0.source, target: $0.target, pending: $0.kind == .data ? pending.contains($0.id) : nil, sourceMessageID: $0.sourceMessageID) }
-        return BridgeBoard(id: b.id, title: b.title, nodes: nodes, edges: edges, viewport: b.viewport)
+        return BridgeBoard(id: b.id, title: b.title, nodes: nodes, edges: edges, groups: b.groups, viewport: b.viewport, history: history)
     }
 }
 
@@ -333,8 +336,8 @@ final class CanvasBridge: NSObject, ObservableObject, WKScriptMessageHandler {
             let nodes = canvas.library.boards.first { $0.id == id }?.nodes.filter { ids.contains($0.id) } ?? []
             let titles = nodes.compactMap { node in node.source?.title ?? app.sessions.first { $0.id == node.sessionID }?.title }
             let name = titles.count == 1 ? "「\(titles[0])」" : "\(ids.count) 个节点"
-            let files = nodes.contains { $0.source?.kind == .files } ? "文件节点里复制的文件也会删除，原文件不受影响。" : ""
-            confirm(title: "删除\(name)？", detail: "只删除本地记录和画布上的节点，官方 CLI 中的历史和工作目录文件不受影响。" + files, action: "删除") { [canvas] in
+            let files = nodes.contains { $0.source?.kind == .files } ? "文件节点里复制的文件也会删除，原文件保留。" : ""
+            confirm(title: "删除\(name)？", detail: "这会删除本地会话记录并清空本画布的撤销历史，无法通过画布撤销恢复。官方 CLI 中的历史和工作目录文件保留。" + files, action: "删除") { [canvas] in
                 canvas.deleteNodes(boardID: id, nodeIDs: Set(ids))
             }
         case "node.rename":
@@ -346,6 +349,22 @@ final class CanvasBridge: NSObject, ObservableObject, WKScriptMessageHandler {
         case "node.quote":
             guard let b = c.boardID, let n = c.nodeID, let m = c.messageID else { return }
             canvas.quote(boardID: b, nodeID: n, messageID: m)
+        case "board.layout":
+            guard let b = c.boardID else { return }
+            canvas.layout(boardID: b, sizes: c.sizes ?? [])
+        case "board.undo", "board.redo":
+            guard let b = c.boardID else { return }
+            canvas.undo(boardID: b, redo: c.type == "board.redo")
+        case "group.create", "group.add":
+            guard let b = c.boardID, let ids = c.nodeIDs else { return }
+            if c.type == "group.add", c.groupID == nil { return }
+            canvas.group(boardID: b, nodeIDs: Set(ids), into: c.type == "group.add" ? c.groupID : nil)
+        case "group.rename":
+            guard let b = c.boardID, let g = c.groupID, let title = c.title else { return }
+            canvas.renameGroup(boardID: b, groupID: g, title: title)
+        case "group.dissolve":
+            guard let b = c.boardID, let g = c.groupID else { return }
+            canvas.dissolveGroup(boardID: b, groupID: g)
         case "board.search":
             guard let id = c.id, let b = c.boardID, let query = c.text,
                   let board = canvas.library.boards.first(where: { $0.id == b }) else { return }
@@ -550,7 +569,7 @@ final class CanvasBridge: NSObject, ObservableObject, WKScriptMessageHandler {
         let boards = canvas.library.boards.map { BridgeBoardSummary(id: $0.id, title: $0.title, nodeCount: $0.nodes.count) }
         if boards != sentBoards { state.boards = boards; sentBoards = boards }
         if let current = canvas.currentBoard {
-            let board = BridgeEncoding.board(current, sessions: sessions, running: app.runningSessionIDs, importing: canvas.importingSources)
+            let board = BridgeEncoding.board(current, sessions: sessions, running: app.runningSessionIDs, history: canvas.historyStatus(boardID: current.id), importing: canvas.importingSources)
             if board != sentBoard { state.board = board; sentBoard = board }
         }
 
@@ -592,6 +611,7 @@ final class CanvasBridge: NSObject, ObservableObject, WKScriptMessageHandler {
         if !drafts.isEmpty { state.drafts = drafts }
 
         if let focus = canvas.focusNodeID { state.focusNodeID = focus; canvas.focusNodeID = nil }
+        if let fit = canvas.fitBoardID { state.fitBoardID = fit; canvas.fitBoardID = nil }
         if let c = canvas.chain {
             state.chain = BridgeChain(boardID: c.boardID, total: c.order.count, index: c.index, currentNodeID: c.order[safe: c.index])
         }
@@ -599,7 +619,7 @@ final class CanvasBridge: NSObject, ObservableObject, WKScriptMessageHandler {
         if fill != nil { canvas.composerFill = nil }
 
         let changed = reset || state.boards != nil || state.board != nil || state.summaries != nil || state.removedSessions != nil
-            || state.details != nil || state.appends != nil || state.focusNodeID != nil
+            || state.details != nil || state.appends != nil || state.focusNodeID != nil || state.fitBoardID != nil
             || state.models != nil || state.quotas != nil || state.drafts != nil || state.chain != sentChain
             || state.error != sentError || app.runningSessionIDs != sentRunning
         sentError = state.error

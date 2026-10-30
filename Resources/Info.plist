@@ -6,8 +6,8 @@
     <key>CFBundleName</key><string>AgentDesk</string>
     <key>CFBundleDisplayName</key><string>AgentDesk</string>
     <key>CFBundlePackageType</key><string>APPL</string>
-    <key>CFBundleShortVersionString</key><string>0.6.0</string>
-    <key>CFBundleVersion</key><string>11</string>
+    <key>CFBundleShortVersionString</key><string>0.7.0</string>
+    <key>CFBundleVersion</key><string>12</string>
     <key>NSMicrophoneUsageDescription</key><string>仅在你点击听写后使用麦克风，将语音转成输入框中的文字。</string>
     <key>NSSpeechRecognitionUsageDescription</key><string>使用本机语音识别生成可编辑文字，识别结果不会自动发送。</string>
     <key>LSMinimumSystemVersion</key><string>14.0</string>

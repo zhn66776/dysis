@@ -259,7 +259,7 @@ Swift → 网页：`window.agentDesk.receive(payload)`
 - 草稿节点
 - [x] 文件和 MCP 结果节点（0.6.0）；面板内附件已有，听写、导出待做
 - [x] “已过期”标记与重跑下游（0.5.0）
-- 自动布局、小地图、撤销 / 重做
+- [x] 自动布局、小地图、撤销 / 重做（0.7.0）
 - 讨论室搬到画布上
 
 ## 7. 开发
@@ -281,3 +281,12 @@ bash scripts/build-app.sh                # 构建前端并打包进 build/AgentD
 - `context.preview { boardID, nodeID, text, id }` → `context.preview { nodeID, id, text, notes }`：复用发送路径的文字与附件组装，只读取状态。前端提供刷新；原生分叉与官方已有历史通过说明单独展示。
 
 节点摘要增加 `latestReplyID`，用于明确分支与引用的完整回复；展开时才订阅完整记录。搜索定位打开完整历史并高亮命中消息，不通过加载整个画布的完整历史实现搜索。
+
+## 9. 画布整理（0.7.0）
+
+- `CanvasGroup { id, title, nodeIDs }` 存在 `CanvasBoard.groups` 中，旧文件缺少字段时按空数组读取。每个节点最多属于一个组；空组自动清理。对话、文件和 MCP 节点均可分组。分组不改变上下文或资料内容。
+- 分组框依据成员位置与当前卡片尺寸计算；节点始终保存绝对坐标，拖动组标题最终提交一次 `node.move`，因此整组移动只占一步撤销。
+- `board.layout { boardID, sizes: [{ nodeID, width, height }] }`：先排组内节点，再排组和独立节点。按依赖分层、同层竖排，独立节点或独立分组使用网格，预留展开卡片尺寸。组间出现循环时按保存顺序处理，保证完成与互不覆盖。`fitBoardID` 在布局后请求前端适应视口。
+- `group.create / group.add { boardID, nodeIDs, groupID? }`，`group.rename { boardID, groupID, title }`，`group.dissolve { boardID, groupID }`。
+- `board.undo / board.redo { boardID }`：原生层按画布保存最多 100 步本次启动内的编辑。快照仅包含位置、分组与连线，不存会话内容或视口。撤销/重做保留连线当前的投递版本及原生分叉状态，避免把已投递资料再次当作新输入。新增/删除节点时清空受影响画布的编辑历史。
+- 小地图复用 React Flow 的 MiniMap，支持拖动平移和滚动缩放。分组只作为背景框显示，搜索、连接和会话操作继续定位真实节点。
