@@ -373,8 +373,9 @@ public final class CodexBackend: AgentBackend, @unchecked Sendable {
                         // high/low override instead of resetting to default.
                         selectedReasoningEffort = officialDefault
                     }
-                    // A trusted project keeps Codex's own instructions.
-                    let instructions: String? = request.projectAccess ? nil : Self.baseInstructions(mcpServers: mcpServers)
+                    // Codex keeps its own base instructions; AgentDesk's go in
+                    // as developer instructions (restated on resume and fork).
+                    let instructions = Self.developerInstructions(project: request.projectAccess, mcpServers: mcpServers, rules: request.instructions)
                     let sandboxMode = policy.sandboxMode
                     if let existing = request.remoteSessionID, !existing.isEmpty {
                         var params: [String: Any] = [
@@ -384,7 +385,7 @@ public final class CodexBackend: AgentBackend, @unchecked Sendable {
                         ].merging(policy.thread) { $1 }
                         // Restated on resume: the thread keeps what it
                         // started with, and the opened servers can change.
-                        if let instructions { params["baseInstructions"] = instructions }
+                        if let instructions { params["developerInstructions"] = instructions }
                         if !request.modelID.isEmpty { params["model"] = request.modelID }
                         _ = try send("thread/resume", params: params, step: .thread)
                     } else if let fork = request.forkFrom {
@@ -396,7 +397,7 @@ public final class CodexBackend: AgentBackend, @unchecked Sendable {
                             "sandbox": sandboxMode,
                             "excludeTurns": true
                         ].merging(policy.thread) { $1 }
-                        if let instructions { params["baseInstructions"] = instructions }
+                        if let instructions { params["developerInstructions"] = instructions }
                         if let turn = fork.throughTurnID { params["lastTurnId"] = turn }
                         if !request.modelID.isEmpty { params["model"] = request.modelID }
                         _ = try send("thread/fork", params: params, step: .thread)
@@ -405,7 +406,7 @@ public final class CodexBackend: AgentBackend, @unchecked Sendable {
                             "cwd": request.workingDirectory.path,
                             "sandbox": sandboxMode
                         ].merging(policy.thread) { $1 }
-                        if let instructions { params["baseInstructions"] = instructions }
+                        if let instructions { params["developerInstructions"] = instructions }
                         if !request.modelID.isEmpty { params["model"] = request.modelID }
                         _ = try send("thread/start", params: params, step: .thread)
                     }
@@ -500,9 +501,18 @@ public final class CodexBackend: AgentBackend, @unchecked Sendable {
         throw AgentError.processFailure("Codex discovery 未返回有效配置。")
     }
 
+    /// Chat mode's tool note first, then AgentDesk's rule layers.
+    static func developerInstructions(project: Bool, mcpServers: [AgentMCPServer], rules: String?) -> String? {
+        let parts = [project ? nil : chatToolInstructions(mcpServers: mcpServers), rules].compactMap { $0 }.filter { !$0.isEmpty }
+        return parts.isEmpty ? nil : parts.joined(separator: "\n\n")
+    }
+
     /// A thread told to use no tools never calls an opened MCP server, even
-    /// with it loaded (checked live with codex-cli 0.165).
-    static func baseInstructions(mcpServers: [AgentMCPServer]) -> String {
+    /// with it loaded (checked live with codex-cli 0.165, when this text
+    /// replaced the base instructions; as developer instructions it still
+    /// needs a live check). The shell is off and the sandbox read-only
+    /// either way, and every approval request is declined.
+    static func chatToolInstructions(mcpServers: [AgentMCPServer]) -> String {
         guard !mcpServers.isEmpty else { return "Use no tools in this session. Answer with text only." }
         let names = mcpServers.map(\.name).joined(separator: ", ")
         let files = mcpServers.contains { $0.name.hasSuffix(FolderAccessPolicy.serverName) } ? " " + FolderAccessPolicy.modelNote : ""

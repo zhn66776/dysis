@@ -48,7 +48,9 @@ public struct CursorBackend: AgentBackend, Sendable {
                     if let remoteID = request.remoteSessionID, !remoteID.isEmpty {
                         arguments += ["--resume", remoteID]
                     }
-                    arguments += [request.projectAccess ? request.prompt : CursorBackend.prompt(request.prompt, mcpServers: allowedMCP)]
+                    let message = request.projectAccess ? request.prompt : CursorBackend.prompt(request.prompt, mcpServers: allowedMCP)
+                    // No system prompt flag: AgentDesk's rules lead the message as their own block.
+                    arguments += [RuleLayers.cursorPrompt(message, rules: request.instructions)]
                     let process = CLIProcess(
                         executable: request.executableURL,
                         arguments: arguments,

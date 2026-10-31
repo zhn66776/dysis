@@ -28,6 +28,7 @@ function ProjectRow({ board }: { board: BoardSummary }) {
       <div className="project-actions">
         <button className="link" onClick={e => { e.stopPropagation(); send({ type: 'board.reveal', boardID: board.id }) }}>在访达中显示</button>
         {p.trusted === true && !p.git && !p.missing && <button className="link" title="每个节点在自己的 worktree 和分支上并行改代码" onClick={e => { e.stopPropagation(); send({ type: 'board.gitInit', boardID: board.id }) }}>初始化 git…</button>}
+        {!p.missing && <button className="link" title="项目规则 AGENTS.md、CLAUDE.md、始终允许的命令" onClick={e => { e.stopPropagation(); send({ type: 'app.open', window: 'project', boardID: board.id }) }}>规则与设置…</button>}
         {p.trusted === true
           ? <button className="link" onClick={e => { e.stopPropagation(); send({ type: 'board.trust', boardID: board.id, ok: false }) }}>取消信任</button>
           : <button className="link" onClick={e => { e.stopPropagation(); send({ type: 'board.trust', boardID: board.id, ok: true }) }}>信任…</button>}

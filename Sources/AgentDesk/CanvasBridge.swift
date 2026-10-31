@@ -117,6 +117,8 @@ struct BridgeSummary: Encodable, Equatable {
     let messageCount: Int, updatedAt: Double
     let contextUsed: Int?, contextWindow: Int?
     let latestReplyID: UUID?
+    /// The node's own rules (third rule layer); nil when it has none.
+    let rules: String?
 }
 
 struct BridgeModelOption: Encodable, Equatable { let id: String; let key: String; let label: String }
@@ -127,6 +129,16 @@ struct BridgeQuota: Encodable, Equatable { let windows: [BridgeQuotaWindow]; let
 struct BridgeDraft: Encodable, Equatable {
     struct File: Encodable, Equatable { let id: UUID; let name: String; let kind: String; let bytes: Int64 }
     let sessionID: UUID, files: [File], importing: Bool
+}
+
+/// The open panel's project memory: its size against the budget and the drafts waiting for this node.
+struct BridgeMemory: Encodable, Equatable {
+    struct Draft: Encodable, Equatable { let id: UUID; let text: String; let author: String; let fromModel: Bool; let reason: String? }
+    let sessionID: UUID
+    /// The board has a project folder, so replies can be remembered.
+    let available: Bool
+    let entries: Int, characters: Int, budget: Int
+    let drafts: [Draft]
 }
 
 struct BridgeMessage: Encodable, Equatable {
@@ -160,6 +172,7 @@ struct BridgeState: Encodable {
     var models: [String: [BridgeModelOption]]?
     var quotas: [String: BridgeQuota]?
     var drafts: [BridgeDraft]?
+    var memory: BridgeMemory?
     var chain: BridgeChain = .idle
     var running: [UUID]
     var error: String
@@ -236,7 +249,8 @@ enum BridgeEncoding {
             state: state, status: running ? status : nil, preview: String(previewSource.prefix(160)),
             messageCount: s.messages.count, updatedAt: s.updatedAt.timeIntervalSince1970 * 1000,
             contextUsed: s.contextUsage?.usedTokens, contextWindow: s.contextUsage?.windowTokens,
-            latestReplyID: s.messages.last { $0.role == .assistant && $0.state == .complete && !$0.text.isEmpty }?.id)
+            latestReplyID: s.messages.last { $0.role == .assistant && $0.state == .complete && !$0.text.isEmpty }?.id,
+            rules: s.rules)
     }
 
     static func message(_ m: ChatMessage) -> BridgeMessage {
@@ -298,6 +312,9 @@ final class CanvasBridge: NSObject, ObservableObject, WKScriptMessageHandler {
     private var sentChain: BridgeChain = .idle
     private var sentQuotas: [String: BridgeQuota]?
     private var sentDrafts: [UUID: BridgeDraft] = [:]
+    private var sentMemory: BridgeMemory?
+    /// Parsed memory files by path, kept while the file's date and size stay the same.
+    private var memoryCache: [String: (stamp: String, entries: Int, characters: Int)] = [:]
     /// Open confirmations; each runs at most once, and only on `confirm.answer` with ok.
     private var pendingConfirms: [UUID: (Bool) -> Void] = [:]
     /// Approval cards the page shows; unlike confirmations they survive a reload.
@@ -318,6 +335,7 @@ final class CanvasBridge: NSObject, ObservableObject, WKScriptMessageHandler {
         canvas.objectWillChange.sink { [weak self] in self?.schedulePush() }.store(in: &observers)
         app.attachmentDrafts.objectWillChange.sink { [weak self] in self?.schedulePush() }.store(in: &observers)
         app.approvals.objectWillChange.sink { [weak self] in self?.schedulePush() }.store(in: &observers)
+        app.memory.objectWillChange.sink { [weak self] in self?.schedulePush() }.store(in: &observers)
     }
 
     /// Files dropped on the open conversation panel become its attachments;
@@ -515,8 +533,16 @@ final class CanvasBridge: NSObject, ObservableObject, WKScriptMessageHandler {
             if !context.inherited.isEmpty { notes.append("回放继承只包含文字；父会话的图片和工具记录不随之传入。") }
             if app.attachmentDrafts.importing.contains(node.sessionID) { notes.append("附件仍在读取；完成后请刷新预览。") }
             if app.attachmentDrafts.files[node.sessionID, default: []].contains(where: \.isImage) { notes.append("图片通过独立的图片输入传入；此处显示附件名称及文字输入。") }
+            let rules = app.composedRules(sessionID: node.sessionID, project: board.project, projectAccess: mode != .chat)
+            let sources: [[String: Any]] = rules.sources.map { source in
+                var item: [String: Any] = ["title": source.title, "characters": source.characters, "delivery": source.delivery.rawValue]
+                if let path = source.path { item["path"] = NSString(string: path).abbreviatingWithTildeInPath }
+                if let note = source.note { item["note"] = note }
+                return item
+            }
             evaluate(["type": "context.preview", "id": id.uuidString, "nodeID": n.uuidString,
-                      "text": app.canvasInput(prompt: prompt, sessionID: node.sessionID, context: context), "notes": notes, "harness": harness])
+                      "text": app.canvasInput(prompt: prompt, sessionID: node.sessionID, context: context), "notes": notes, "harness": harness,
+                      "rules": sources, "rulesText": rules.text ?? "", "rulesChannel": Self.ruleChannel(session.provider)])
             return
         case "source.createFiles":
             guard let id = c.boardID, let x = c.x, let y = c.y else { return }
@@ -554,6 +580,22 @@ final class CanvasBridge: NSObject, ObservableObject, WKScriptMessageHandler {
                     Task { await app.loadModels(provider) }
                 }
             }
+        case "memory.remember":
+            guard let b = c.boardID, let n = c.nodeID, let m = c.messageID,
+                  let node = canvas.library.boards.first(where: { $0.id == b })?.node(n), projectFolder(sessionID: node.sessionID) != nil,
+                  let message = app.sessions.first(where: { $0.id == node.sessionID })?.messages.first(where: { $0.id == m && $0.role == .assistant }) else { return }
+            app.memory.remember(sessionID: node.sessionID, text: message.text)
+        case "memory.confirm":
+            guard let id = c.id, let text = c.text, let draft = app.memory.drafts.first(where: { $0.id == id }) else { return }
+            guard let folder = projectFolder(sessionID: draft.sessionID) else { app.errorMessage = "这个节点不在项目画布上，没有项目记忆可写。"; return }
+            let title = app.sessions.first { $0.id == draft.sessionID }?.title ?? "对话"
+            do { try app.memory.confirm(id, text: text, folder: folder, sourceTitle: title) }
+            catch { app.errorMessage = "项目记忆未能写入：\(error.localizedDescription)" }
+        case "memory.discard":
+            if let id = c.id { app.memory.discard(id) }
+        case "session.setRules":
+            guard let id = c.sessionID, let text = c.text, !app.runningSessionIDs.contains(id) else { return }
+            app.setSessionRules(id, rules: text)
         case "session.setModel":
             guard let id = c.sessionID, let modelID = c.modelID else { return }
             app.setSessionModel(id, modelID: modelID)
@@ -650,7 +692,7 @@ final class CanvasBridge: NSObject, ObservableObject, WKScriptMessageHandler {
             NSPasteboard.general.setString(text, forType: .string)
             return
         case "app.open":
-            if let window = c.window, ["settings", "classic", "mcp"].contains(window) { openWindow(window, c.sessionID) }
+            if let window = c.window, ["settings", "classic", "mcp", "project"].contains(window) { openWindow(window, window == "project" ? c.boardID : c.sessionID) }
             return
         case "notice.dismiss":
             app.noticeMessage = nil
@@ -661,6 +703,40 @@ final class CanvasBridge: NSObject, ObservableObject, WKScriptMessageHandler {
         default: return
         }
         schedulePush()
+    }
+
+    /// The project folder of the board a session is on, when it exists.
+    func projectFolder(sessionID: UUID) -> URL? {
+        guard let path = canvas.library.boards.first(where: { $0.node(forSession: sessionID) != nil })?.project?.path,
+              FileManager.default.fileExists(atPath: path) else { return nil }
+        return URL(fileURLWithPath: path, isDirectory: true)
+    }
+
+    private func memoryState(_ sessionID: UUID) -> BridgeMemory {
+        let drafts = app.memory.drafts(for: sessionID).map {
+            BridgeMemory.Draft(id: $0.id, text: $0.text, author: $0.author.label, fromModel: $0.author != .user, reason: $0.reason)
+        }
+        guard let folder = projectFolder(sessionID: sessionID) else {
+            return BridgeMemory(sessionID: sessionID, available: false, entries: 0, characters: 0, budget: ProjectMemory.budget, drafts: drafts)
+        }
+        let memory = ProjectMemory(folder: folder)
+        let attributes = try? FileManager.default.attributesOfItem(atPath: memory.url.path)
+        let stamp = "\((attributes?[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0)-\((attributes?[.size] as? NSNumber)?.intValue ?? -1)"
+        if memoryCache[memory.url.path]?.stamp != stamp {
+            let text = memory.text()
+            memoryCache[memory.url.path] = (stamp, ProjectMemory.parse(text).count, text.trimmingCharacters(in: .whitespacesAndNewlines).count)
+        }
+        let cached = memoryCache[memory.url.path]!
+        return BridgeMemory(sessionID: sessionID, available: true, entries: cached.entries, characters: cached.characters, budget: ProjectMemory.budget, drafts: drafts)
+    }
+
+    /// Where the injected rule layers go for this provider, for the context preview.
+    static func ruleChannel(_ provider: ProviderID) -> String {
+        switch provider {
+        case .claude: return "Claude Code · --append-system-prompt"
+        case .codex: return "Codex · thread developerInstructions"
+        case .grok, .gemini: return "Cursor · 消息前的单独一段"
+        }
     }
 
     /// Asks the page to show its confirmation dialog (`confirm.show`). The
@@ -714,7 +790,7 @@ final class CanvasBridge: NSObject, ObservableObject, WKScriptMessageHandler {
         if reset {
             state.reset = true
             sentBoards = nil; sentBoard = nil; sentSummaries = [:]; sentDetails = [:]
-            sentModels = nil; sentQuotas = nil; sentDrafts = [:]; sentApprovals = []
+            sentModels = nil; sentQuotas = nil; sentDrafts = [:]; sentApprovals = []; sentMemory = nil
         }
 
         let waitingSessions = Set(app.approvals.pending.map(\.request.sessionID))
@@ -767,6 +843,8 @@ final class CanvasBridge: NSObject, ObservableObject, WKScriptMessageHandler {
             if sentDrafts[id] != draft { drafts.append(draft); sentDrafts[id] = draft }
         }
         if !drafts.isEmpty { state.drafts = drafts }
+        let memory = panelSessionID.map(memoryState)
+        if memory != sentMemory { state.memory = memory; sentMemory = memory }
 
         if let focus = canvas.focusNodeID { state.focusNodeID = focus; canvas.focusNodeID = nil }
         if let fit = canvas.fitBoardID { state.fitBoardID = fit; canvas.fitBoardID = nil }
@@ -778,7 +856,7 @@ final class CanvasBridge: NSObject, ObservableObject, WKScriptMessageHandler {
 
         let changed = reset || state.boards != nil || state.board != nil || state.summaries != nil || state.removedSessions != nil
             || state.details != nil || state.appends != nil || state.focusNodeID != nil || state.fitBoardID != nil
-            || state.models != nil || state.quotas != nil || state.drafts != nil || state.chain != sentChain
+            || state.models != nil || state.quotas != nil || state.drafts != nil || state.memory != nil || state.chain != sentChain
             || state.error != sentError || state.notice != sentNotice || app.runningSessionIDs != sentRunning
         sentError = state.error
         sentNotice = state.notice

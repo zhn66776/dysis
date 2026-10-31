@@ -50,6 +50,18 @@ final class HarnessApprovalTests: XCTestCase {
         XCTAssertEqual(HarnessMode.resolve(project: ask, nodeLevel: .auto, workingDirectory: "/p"), .project(.ask), "a node never goes above its board")
         XCTAssertEqual(HarnessMode.resolve(project: ask, nodeLevel: nil, workingDirectory: "/elsewhere"), .chat)
         XCTAssertEqual(HarnessMode.resolve(project: nil, nodeLevel: nil, workingDirectory: "/p"), .chat)
+        // Worktrees (H2) and levels (H1) together: the canvas's write decision replaces the folder check.
+        XCTAssertEqual(HarnessMode.resolve(project: ask, nodeLevel: nil, workingDirectory: "/wt/1", writable: true), .project(.ask))
+        XCTAssertEqual(HarnessMode.resolve(project: ask, nodeLevel: nil, workingDirectory: "/p", writable: false), .chat)
+        let worktree = NodeWorktree(repository: "/p", path: "/wt/1", branch: "agentdesk/b/n", baseBranch: "main", baseCommit: "abc")
+        var writer = CanvasNode(sessionID: UUID(), position: CanvasPoint(x: 0, y: 0))
+        writer.worktree = worktree
+        let board = CanvasBoard(title: "b", project: ask, nodes: [writer])
+        let session = ChatSession(provider: .claude, modelID: "m", workingDirectory: worktree.workingDirectory)
+        XCTAssertEqual(HarnessMode.resolve(board: board, node: writer, session: session), .project(.ask), "a worktree node runs at its board's level")
+        var merger = CanvasNode(sessionID: UUID(), position: CanvasPoint(x: 0, y: 0), merge: .compare)
+        merger.permissionLevel = nil
+        XCTAssertEqual(HarnessMode.resolve(board: board, node: merger, session: ChatSession(provider: .claude, modelID: "m", workingDirectory: "/p")), .chat, "a merge node without a worktree only reads")
         XCTAssertEqual(HarnessMode.project(.readOnly).label, "项目 · 只读")
         XCTAssertEqual(HarnessMode.chat.key, "chat")
 

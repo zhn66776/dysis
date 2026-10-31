@@ -23,6 +23,8 @@ final class AppModel: ObservableObject {
     private var quotaReadAt: [ProviderID: Date] = [:]
     // A presentation mode for this app launch, not an execution permission.
     @Published var developerModeEnabled = false
+    /// AgentDesk's global rules (`rules.md` in the data folder), sent with every canvas and private chat turn.
+    @Published private(set) var globalRules = ""
 
     private var store: LocalStore?
     private var tasks: [UUID: Task<Void, Never>] = [:]
@@ -35,6 +37,7 @@ final class AppModel: ObservableObject {
     let attachmentDrafts: AttachmentDrafts
     let folderAccess: FolderAccessCenter
     let approvals: ApprovalCenter
+    let memory: MemoryCenter
     var dataRoot: URL { plaza.root }
 
     var selectedSession: ChatSession? { sessions.first { $0.id == selectedSessionID } }
@@ -45,6 +48,7 @@ final class AppModel: ObservableObject {
         attachmentDrafts = AttachmentDrafts(root: resolvedRoot)
         folderAccess = FolderAccessCenter(root: resolvedRoot)
         approvals = ApprovalCenter(exchange: folderAccess.exchange, token: folderAccess.token)
+        memory = MemoryCenter(root: resolvedRoot, token: folderAccess.token)
         configuration = Self.defaults()
         do {
             let store = try LocalStore(root: root)
@@ -62,8 +66,12 @@ final class AppModel: ObservableObject {
             storageReadable = false
             errorMessage = "无法读取本地记录，原文件已保留。\(error.localizedDescription)"
         }
+        globalRules = GlobalRulesStore(root: resolvedRoot).load()
         folderAccess.describe = { [weak self] id in
             self?.sessions.first { $0.id == id }.map { ($0.title, $0.provider) }
+        }
+        memory.describe = { [weak self] id in
+            self?.sessions.first { $0.id == id }.map { $0.modelID.isEmpty ? $0.provider.runtimeName : "\($0.provider.runtimeName)，\($0.modelID)" }
         }
     }
 
@@ -152,8 +160,33 @@ final class AppModel: ObservableObject {
         folderAccess.forget(session: id)
         approvals.forget(session: id)
         diffStore.remove(session: id)
+        memory.discard(session: id)
         if selectedSessionID == id { selectedSessionID = sessions.first?.id }
         persist()
+    }
+
+    func saveGlobalRules(_ text: String) {
+        do {
+            try GlobalRulesStore(root: dataRoot).save(text)
+            globalRules = GlobalRulesStore(root: dataRoot).load()
+        } catch { errorMessage = "全局规则未能保存：\(error.localizedDescription)" }
+    }
+
+    func setSessionRules(_ id: UUID, rules: String) {
+        guard storageReadable, let i = sessions.firstIndex(where: { $0.id == id }) else { return }
+        let trimmed = String(rules.prefix(8_000)).trimmingCharacters(in: .whitespacesAndNewlines)
+        sessions[i].rules = trimmed.isEmpty ? nil : trimmed
+        persist()
+    }
+
+    /// The rule layers a turn of this session carries; read from disk each
+    /// time, so an edited `AGENTS.md` applies to the next message.
+    /// `projectAccess` is the turn's mode (`HarnessMode`): a worktree node works in its project too.
+    func composedRules(sessionID: UUID, project: CanvasProject?, projectAccess: Bool) -> ComposedRules {
+        guard let session = sessions.first(where: { $0.id == sessionID }) else { return ComposedRules(text: nil, sources: []) }
+        let folder = project.map { URL(fileURLWithPath: $0.path, isDirectory: true) }.flatMap { FileManager.default.fileExists(atPath: $0.path) ? $0 : nil }
+        return RuleLayers.compose(provider: session.provider, projectAccess: projectAccess, global: globalRules,
+                                  project: folder.map(ProjectRules.read), memory: folder.map { ProjectMemory(folder: $0).text() }, node: session.rules ?? "")
     }
 
     func saveConfiguration() {
@@ -164,14 +197,15 @@ final class AppModel: ObservableObject {
 
     /// MCP servers the user opened to the model (MCP 工具 → 让模型自己调用),
     /// read on every send so a change applies to the next message.
-    /// AgentDesk's files server joins them when folder access is on, or to
-    /// serve Claude Code's approval tool for a project folder (`approvals`).
-    private func modelMCPServers(sessionID: UUID, approvals folder: String? = nil) -> [AgentMCPServer] {
+    /// AgentDesk's files server joins them when folder access is on, to
+    /// serve Claude Code's approval tool for a project folder (`approvals`),
+    /// and on a project board for `memory_propose`.
+    private func modelMCPServers(sessionID: UUID, approvals approvalFolder: String? = nil, project: CanvasProject?) -> [AgentMCPServer] {
         let url = dataRoot.appendingPathComponent("mcp-servers.json")
         let configs = (try? Data(contentsOf: url)).flatMap { try? JSONDecoder().decode([MCPServerConfiguration].self, from: $0) } ?? []
         var servers = AgentMCPServer.forModel(configs)
-        if configuration.folderAccess || folder != nil,
-           let files = folderAccess.server(for: sessionID, dataRoot: dataRoot, files: configuration.folderAccess, approvals: folder) { servers.append(files) }
+        let folder = project.map { URL(fileURLWithPath: $0.path, isDirectory: true) }.flatMap { FileManager.default.fileExists(atPath: $0.path) ? $0 : nil }
+        if let files = folderAccess.server(for: sessionID, dataRoot: dataRoot, files: configuration.folderAccess, approvals: approvalFolder, project: folder) { servers.append(files) }
         return servers
     }
 
@@ -241,10 +275,11 @@ final class AppModel: ObservableObject {
         let level = mode.level ?? .auto
         // Claude Code asks through the files helper; Codex asks in process.
         let approvalFolder = provider == .claude && mode != .chat && level != .auto ? session.workingDirectory : nil
-        let request = AgentRequest(localSessionID: id, remoteSessionID: session.remoteSessionID, prompt: input, workingDirectory: URL(fileURLWithPath: session.workingDirectory), modelID: session.modelID, executableURL: executable, reasoningEffort: session.reasoningEffort, images: images, forkFrom: session.remoteSessionID == nil ? context.fork : nil, mcpServers: modelMCPServers(sessionID: id, approvals: approvalFolder),
+        let request = AgentRequest(localSessionID: id, remoteSessionID: session.remoteSessionID, prompt: input, workingDirectory: URL(fileURLWithPath: session.workingDirectory), modelID: session.modelID, executableURL: executable, reasoningEffort: session.reasoningEffort, images: images, forkFrom: session.remoteSessionID == nil ? context.fork : nil, mcpServers: modelMCPServers(sessionID: id, approvals: approvalFolder, project: project),
                                    projectAccess: mode != .chat,
                                    userFolder: !URL(fileURLWithPath: session.workingDirectory).path.hasPrefix(dataRoot.path + "/"),
-                                   permissionLevel: level, approver: approvals.approver)
+                                   permissionLevel: level, approver: approvals.approver,
+                                   instructions: composedRules(sessionID: id, project: project, projectAccess: mode != .chat).text)
         let backend: any AgentBackend
         switch provider {
         case .claude: backend = ClaudeBackend()

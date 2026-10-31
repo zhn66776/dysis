@@ -64,6 +64,8 @@ public struct ChatSession: Identifiable, Codable, Equatable, Sendable {
     public var reasoningEffort: String?
     /// Context occupancy reported with the latest reply, if the provider reports it.
     public var contextUsage: ContextUsage?
+    /// The node's own rules (H4 third layer), sent after the global ones.
+    public var rules: String?
     public init(id: UUID = UUID(), title: String = "新对话", provider: ProviderID, modelID: String, remoteSessionID: String? = nil, workingDirectory: String, messages: [ChatMessage] = [], createdAt: Date = Date(), updatedAt: Date = Date(), reasoningEffort: String? = nil) {
         self.id = id; self.title = title; self.provider = provider; self.modelID = modelID; self.remoteSessionID = remoteSessionID; self.workingDirectory = workingDirectory; self.messages = messages; self.createdAt = createdAt; self.updatedAt = updatedAt
         self.reasoningEffort = reasoningEffort
@@ -168,8 +170,13 @@ public struct AgentRequest: Sendable {
     public let permissionLevel: PermissionLevel
     /// Asks the user about one action; no approver means every such action is declined.
     public let approver: AgentApprover?
-    public init(localSessionID: UUID, remoteSessionID: String?, prompt: String, workingDirectory: URL, modelID: String, executableURL: URL, reasoningEffort: String? = nil, images: [AgentImageInput] = [], forkFrom: AgentFork? = nil, mcpServers: [AgentMCPServer] = [], projectAccess: Bool = false, userFolder: Bool = false, permissionLevel: PermissionLevel = .auto, approver: AgentApprover? = nil) {
+    /// AgentDesk's rule layers for this turn (global, injected project
+    /// parts, node), already composed; nil sends none. Each backend puts it
+    /// in its own instruction channel.
+    public let instructions: String?
+    public init(localSessionID: UUID, remoteSessionID: String?, prompt: String, workingDirectory: URL, modelID: String, executableURL: URL, reasoningEffort: String? = nil, images: [AgentImageInput] = [], forkFrom: AgentFork? = nil, mcpServers: [AgentMCPServer] = [], projectAccess: Bool = false, userFolder: Bool = false, permissionLevel: PermissionLevel = .auto, approver: AgentApprover? = nil, instructions: String? = nil) {
         self.mcpServers = mcpServers
+        self.instructions = instructions.flatMap { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : $0 }
         self.projectAccess = projectAccess
         self.permissionLevel = permissionLevel
         self.approver = approver

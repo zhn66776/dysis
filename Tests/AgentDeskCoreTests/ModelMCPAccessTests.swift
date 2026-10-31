@@ -92,8 +92,8 @@ final class ModelMCPAccessTests: XCTestCase {
     }
 
     func testCodexInstructionsOnlyForbidToolsWithoutServers() {
-        XCTAssertEqual(CodexBackend.baseInstructions(mcpServers: []), "Use no tools in this session. Answer with text only.")
-        XCTAssertTrue(CodexBackend.baseInstructions(mcpServers: [AgentMCPServer(name: "portfolio", transport: python)]).contains("portfolio"))
+        XCTAssertEqual(CodexBackend.chatToolInstructions(mcpServers: []), "Use no tools in this session. Answer with text only.")
+        XCTAssertTrue(CodexBackend.chatToolInstructions(mcpServers: [AgentMCPServer(name: "portfolio", transport: python)]).contains("portfolio"))
     }
 
     func testCodexApprovesToolCallsOnlyForOurServers() {

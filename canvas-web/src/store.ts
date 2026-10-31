@@ -46,6 +46,7 @@ export function applyState(prev: AppState, p: StatePayload): AppState {
     models: p.models ?? (p.reset ? {} : prev.models),
     quotas: p.quotas ?? (p.reset ? {} : prev.quotas),
     drafts,
+    memory: p.memory ?? (p.reset ? undefined : prev.memory),
     chain: p.chain ?? prev.chain,
   }
 }

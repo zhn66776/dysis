@@ -25,7 +25,8 @@ public struct ClaudeBackend: AgentBackend, Sendable {
                     if !request.mcpServers.isEmpty { environment["MCP_TOOL_TIMEOUT"] = String(FolderAccessPolicy.toolTimeoutSeconds * 1000) }
 
                     var arguments = try ClaudeBackend.commonArguments(modelID: request.modelID, effort: request.reasoningEffort, mcpServers: request.mcpServers, project: request.projectAccess,
-                                                                      level: request.permissionLevel, approvalTool: FolderAccessPolicy.approvalTool(in: request.mcpServers))
+                                                                      level: request.permissionLevel, approvalTool: FolderAccessPolicy.approvalTool(in: request.mcpServers),
+                                                                      instructions: request.instructions)
                     arguments += try ClaudeBackend.sessionArguments(for: request)
                     let fork = request.remoteSessionID?.isEmpty == false ? nil : request.forkFrom
                     let imageContent = try MultimodalInputSupport.claudeContent(prompt: request.prompt, images: request.images)
@@ -188,7 +189,32 @@ public struct ClaudeBackend: AgentBackend, Sendable {
     static let maxProjectTurns = 100
 
     static func commonArguments(modelID: String, effort: String?, mcpServers: [AgentMCPServer] = [], project: Bool = false,
-                                level: PermissionLevel = .auto, approvalTool: String? = nil) throws -> [String] {
+                                level: PermissionLevel = .auto, approvalTool: String? = nil, instructions: String? = nil) throws -> [String] {
+        try commonToolArguments(modelID: modelID, effort: effort, mcpServers: mcpServers, project: project, level: level, approvalTool: approvalTool)
+            + ruleArguments(instructions: instructions, project: project)
+    }
+
+    /// AgentDesk's rule layers ride on `--append-system-prompt`. The system
+    /// prompt snapshot is off so an edited rule applies from the next turn
+    /// rather than after the next compaction. In a project, `AGENTS.md`
+    /// loads beside `CLAUDE.md` (once when `CLAUDE.md` already imports it).
+    /// Auto memory is off in both modes (`settingsJSON`).
+    static func ruleArguments(instructions: String?, project: Bool) throws -> [String] {
+        var arguments = ["--system-prompt-snapshot", "off", "--settings", try settingsJSON(project: project)]
+        if let instructions, !instructions.isEmpty { arguments += ["--append-system-prompt", instructions] }
+        return arguments
+    }
+
+    /// Claude's own auto memory stays off: the project memory is
+    /// AgentDesk's `.agentdesk/memory.md`, the same for every CLI.
+    static func settingsJSON(project: Bool) throws -> String {
+        var settings: [String: Any] = ["autoMemoryEnabled": false]
+        if project { settings["instructionFiles"] = "claude-md-and-agents-md" }
+        return String(decoding: try JSONSerialization.data(withJSONObject: settings, options: [.sortedKeys]), as: UTF8.self)
+    }
+
+    private static func commonToolArguments(modelID: String, effort: String?, mcpServers: [AgentMCPServer], project: Bool,
+                                            level: PermissionLevel, approvalTool: String?) throws -> [String] {
         if project {
             let permissions = level == .auto ? ["--permission-mode", "bypassPermissions"]
                 : ["--permission-mode", "default", "--permission-prompts", approvalTool == nil ? "none" : "host"]

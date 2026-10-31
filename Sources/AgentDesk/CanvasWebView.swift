@@ -206,6 +206,9 @@ struct CanvasRootView: View {
     @Environment(\.openSettings) private var openSettings
     @Environment(\.openWindow) private var openWindow
     @State private var mcpTarget: MCPTarget?
+    @State private var projectTarget: ProjectTarget?
+
+    private struct ProjectTarget: Identifiable { let id: UUID; let project: CanvasProject }
 
     /// `refresh` is set when the workbench runs an MCP node's tool again.
     private struct MCPTarget: Identifiable {
@@ -226,6 +229,11 @@ struct CanvasRootView: View {
                     switch window {
                     case "settings": openSettings()
                     case "classic": openWindow(id: "classic")
+                    case "project":
+                        // The ID is the board's for this window.
+                        if let id = sessionID, let project = bridge.canvas.library.boards.first(where: { $0.id == id })?.project {
+                            projectTarget = ProjectTarget(id: id, project: project)
+                        }
                     default: mcpTarget = MCPTarget(sessionID: sessionID)
                     }
                 }
@@ -235,6 +243,9 @@ struct CanvasRootView: View {
                     mcpTarget = MCPTarget(sessionID: nil, refresh: (boardID, nodeID, source.title, preset))
                 }
             }
+            .background(EmptyView().sheet(item: $projectTarget) { target in
+                ProjectSettingsView(model: model, project: target.project) { projectTarget = nil }
+            })
             .sheet(item: $mcpTarget) { target in
                 if let refresh = target.refresh {
                     MCPWorkbenchView(root: model.dataRoot, showsAttach: false, preset: refresh.preset, placeLabel: "更新「\(refresh.title)」", onPlace: { result in

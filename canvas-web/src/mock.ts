@@ -2,9 +2,9 @@
 // Replies are canned local text, clearly labelled; nothing leaves the page.
 import { previewLayout } from './organize'
 import { searchExcerpt } from './interactions'
-import type { ApprovalShow, Incoming, BoardPayload, BoardProject, Command, MessagePayload, NodePayload, PermissionLevel, Provider, SessionSummary, SourceFile, SourcePayload, StatePayload } from './types'
+import type { ApprovalShow, Incoming, BoardPayload, BoardProject, Command, ContextPreview, MemoryDraft, MessagePayload, NodePayload, PermissionLevel, Provider, RuleSourcePayload, SessionSummary, SourceFile, SourcePayload, StatePayload } from './types'
 
-interface MockSession { id: string; title: string; provider: Provider; modelID: string; started: boolean; messages: MessagePayload[] }
+interface MockSession { id: string; title: string; provider: Provider; modelID: string; started: boolean; messages: MessagePayload[]; rules?: string }
 
 const models: Record<Provider, string> = { claude: 'sonnet', codex: 'gpt-6.1-sol', grok: 'grok-4.7-medium', gemini: 'gemini-4-argon-medium' }
 const uid = () => crypto.randomUUID()
@@ -17,6 +17,10 @@ export function createMockHost(emit: (p: Incoming) => void) {
   const boards: BoardPayload[] = []
   let current = ''
   let watched = new Set<string>()
+  let panel: string | undefined
+  // Project memory stand-in: drafts per session and the file's size.
+  let memoryDrafts: (MemoryDraft & { sessionID: string })[] = []
+  let memoryEntries = 2, memoryChars = 380
   const running = new Map<string, number>()
   const efforts = new Map<string, string>()
   type Edit = { before: BoardPayload; after: BoardPayload; label: string }
@@ -107,7 +111,7 @@ export function createMockHost(emit: (p: Incoming) => void) {
   const summary = (s: MockSession): SessionSummary => {
     const last = [...s.messages].reverse().find(m => m.role === 'assistant')
     const state = running.has(s.id) ? (waiting(s.id) ? 'waiting' : 'running') : last ? (last.state === 'streaming' ? 'running' : last.state) : 'empty'
-    return { id: s.id, title: s.title, provider: s.provider, modelID: s.modelID, modelKey: s.modelID, effort: efforts.get(s.id), effortChoices: ['low', 'medium', 'high', 'xhigh', 'max'], remoteShort: s.started ? s.id.slice(0, 8) : undefined, state, latestReplyID: [...s.messages].reverse().find(m => m.role === 'assistant' && m.state === 'complete' && m.text)?.id, preview: (last?.text ?? s.messages.at(-1)?.text ?? '').slice(0, 140), messageCount: s.messages.length, updatedAt: Date.now(), contextUsed: s.started ? 18_400 : undefined, contextWindow: s.started ? 200_000 : undefined }
+    return { id: s.id, title: s.title, provider: s.provider, modelID: s.modelID, modelKey: s.modelID, effort: efforts.get(s.id), effortChoices: ['low', 'medium', 'high', 'xhigh', 'max'], remoteShort: s.started ? s.id.slice(0, 8) : undefined, state, latestReplyID: [...s.messages].reverse().find(m => m.role === 'assistant' && m.state === 'complete' && m.text)?.id, preview: (last?.text ?? s.messages.at(-1)?.text ?? '').slice(0, 140), messageCount: s.messages.length, updatedAt: Date.now(), contextUsed: s.started ? 18_400 : undefined, contextWindow: s.started ? 200_000 : undefined, rules: s.rules }
   }
   const boardNow = () => boards.find(x => x.id === current)!
   const push = (extra: Partial<StatePayload> = {}) => { boards.forEach(refreshModes); emit({
@@ -123,6 +127,8 @@ export function createMockHost(emit: (p: Incoming) => void) {
     },
     quotas: { claude: { windows: [{ label: '5 小时', usedPercent: 38, resetsAt: Date.now() + 2.5 * 3600e3 }, { label: '每周', usedPercent: 61 }], updatedAt: Date.now() } },
     drafts: [...watched].map(id => ({ sessionID: id, files: drafts.get(id) ?? [], importing: false })),
+    memory: panel ? { sessionID: panel, available: true, entries: memoryEntries, characters: memoryChars, budget: 4000,
+      drafts: memoryDrafts.filter(d => d.sessionID === panel).map(({ sessionID: _, ...d }) => d) } : undefined,
     ...extra,
   }) }
   const nodeOf = (boardID: string, nodeID: string) => boards.find(x => x.id === boardID)?.nodes.find(n => n.id === nodeID)
@@ -239,7 +245,8 @@ export function createMockHost(emit: (p: Incoming) => void) {
         const provider = sessions.get(node.sessionID)!.provider
         const harness = [`Harness：${({ claude: 'Claude Code · Claude 订阅（claude -p）', codex: 'Codex · ChatGPT 账号（codex app-server）', grok: 'Cursor · Grok · Cursor 订阅（agent --print）', gemini: 'Cursor · Gemini · Cursor 订阅（agent --print）' } as const)[provider]}`,
           `模式：${node.mode === 'chat' || !node.mode ? '聊天' : '项目 · ' + ({ readOnly: '只读', ask: '询问', auto: '自动' } as const)[node.mode]}`, '工作目录：~/AgentDesk Projects/示例画布', '规则文件：AGENTS.md（浏览器预览的示例）']
-        emit({ type: 'context.preview', id: c.id, nodeID: c.nodeID, text: [...inputs, '[本轮用户消息]\n' + (c.text || '（在输入框中填写本轮问题）')].join('\n\n'), notes: ['浏览器预览：示例内容，不调用模型。正式应用复用实际发送时的上下文与附件文字组装。'], harness }); return
+        emit({ type: 'context.preview', id: c.id, nodeID: c.nodeID, text: [...inputs, '[本轮用户消息]\n' + (c.text || '（在输入框中填写本轮问题）')].join('\n\n'), notes: ['浏览器预览：示例内容，不调用模型。正式应用复用实际发送时的上下文与附件文字组装。'], harness,
+          ...mockRules(sessions.get(node.sessionID)) }); return
       }
       case 'node.quote': {
         const parent = nodeOf(c.boardID, c.nodeID)!
@@ -256,7 +263,7 @@ export function createMockHost(emit: (p: Incoming) => void) {
       }
       case 'edge.create': { const x = boardNow(); if (x.nodes.find(n => n.id === c.target)?.source) { push({ error: '文件和 MCP 结果节点只能作为数据线的起点。' }); return }; edit(x, '添加连线', () => { x.edges.push({ id: uid(), kind: 'data', source: c.source, target: c.target, pending: true }) }); break }
       case 'edge.delete': { const x = boardNow(); edit(x, '移除连线', () => { x.edges = x.edges.filter(e => !c.edgeIDs.includes(e.id)) }); break }
-      case 'session.watch': watched = new Set(c.sessionIDs); break
+      case 'session.watch': watched = new Set(c.sessionIDs); panel = c.panelSessionID; break
       case 'chat.send': {
         const n = nodeOf(c.boardID, c.nodeID)!
         const s = sessions.get(n.sessionID)!
@@ -330,6 +337,15 @@ export function createMockHost(emit: (p: Incoming) => void) {
         return
       }
       case 'node.rerun': case 'chain.downstream': case 'chain.stop': break
+      case 'memory.remember': {
+        const s = sessions.get(nodeOf(c.boardID, c.nodeID)?.sessionID ?? '')
+        const m = s?.messages.find(x => x.id === c.messageID)
+        if (s && m) memoryDrafts.push({ id: uid(), sessionID: s.id, text: m.text.slice(0, 1000), author: '用户', fromModel: false })
+        break
+      }
+      case 'memory.confirm': { const d = memoryDrafts.find(x => x.id === c.id); if (d) { memoryEntries += 1; memoryChars += c.text.trim().length + 60 } memoryDrafts = memoryDrafts.filter(x => x.id !== c.id); break }
+      case 'memory.discard': memoryDrafts = memoryDrafts.filter(x => x.id !== c.id); break
+      case 'session.setRules': { const s = sessions.get(c.sessionID); if (s) s.rules = c.text.trim() || undefined; break }
       case 'session.setModel': { const s = sessions.get(c.sessionID); if (s) s.modelID = c.modelID; break }
       case 'session.setEffort': if (c.effort) efforts.set(c.sessionID, c.effort); else efforts.delete(c.sessionID); break
       case 'provider.refresh': break
@@ -362,4 +378,16 @@ export function createMockHost(emit: (p: Incoming) => void) {
     }
     push()
   }
+}
+
+/** Browser preview of the rule sources: a sample global rule plus the node's own. */
+function mockRules(s?: MockSession): Pick<ContextPreview, 'rules' | 'rulesText' | 'rulesChannel'> {
+  const global = '回答用中文；改代码前先说明计划。'
+  const rules: RuleSourcePayload[] = [
+    { title: 'AgentDesk 全局规则', characters: global.length, delivery: 'injected' },
+    { title: '项目规则', characters: 420, delivery: 'native', path: '~/AgentDesk Projects/示例/AGENTS.md', note: '示例：由 CLI 自己读取' },
+  ]
+  const blocks = [`## AgentDesk 全局规则\n\n${global}`]
+  if (s?.rules) { rules.push({ title: '本节点规则', characters: s.rules.length, delivery: 'injected' }); blocks.push(`## 本节点规则\n\n${s.rules}`) }
+  return { rules, rulesText: '以下规则由 AgentDesk 提供，越靠后的优先级越高。\n\n' + blocks.join('\n\n'), rulesChannel: '浏览器预览' }
 }

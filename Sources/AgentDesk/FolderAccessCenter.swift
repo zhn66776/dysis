@@ -33,8 +33,9 @@ final class FolderAccessCenter: ObservableObject {
     }
 
     /// `approvals`: the project folder, when the server also answers Claude Code's permission prompts.
-    func server(for sessionID: UUID, dataRoot: URL, files: Bool = true, approvals: String? = nil) -> AgentMCPServer? {
-        Self.helperURL.flatMap { FolderAccessPolicy.server(helper: $0, dataRoot: dataRoot, sessionID: sessionID, token: token, files: files, approvals: approvals) }
+    /// `project`: the project whose memory the model may propose entries for.
+    func server(for sessionID: UUID, dataRoot: URL, files: Bool = true, approvals: String? = nil, project: URL? = nil) -> AgentMCPServer? {
+        Self.helperURL.flatMap { FolderAccessPolicy.server(helper: $0, dataRoot: dataRoot, sessionID: sessionID, token: token, files: files, approvals: approvals, project: project) }
     }
 
     func poll() {

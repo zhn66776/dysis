@@ -231,6 +231,8 @@
 
 ### H4 · 统一规则
 
+> **状态（2026-10-30，分支 `claude/harness-rules-memory-dd7429`）：已实现，离线测试通过；实际调用待验证（见下面“待实测”）。**
+
 **三层规则**，越往下优先级越高：
 
 1. **AgentDesk 全局规则**：存在 App 数据目录里，在设置中编辑，适用于所有画布，包括聊天模式。注入方式：
@@ -246,11 +248,34 @@
 - 审批里选“以后这类命令都允许”时，Codex 的 execpolicy 修订写进项目的 `.codex/rules`（若该 CLI 版本支持项目级规则）或 AgentDesk 的项目设置，界面上能看到、能删。
 - 上下文预览里列出本轮生效的规则来源和字数。
 
+**实施记录**（以 Claude Code 2.1.308、codex-cli 0.165.0-alpha.1.2、Cursor agent 2026.10.22 的 `--help`、schema 和安装包为准）：
+
+| | 全局规则 + 节点规则 | 项目规则 `AGENTS.md` |
+|---|---|---|
+| Claude Code | `--append-system-prompt`，并加 `--system-prompt-snapshot off`（默认会把第一轮的系统提示词记下来，改过的规则要等压缩后才生效） | 项目模式：`--settings '{"instructionFiles":"claude-md-and-agents-md"}'`，`AGENTS.md` 和 `CLAUDE.md` 一起加载；`CLAUDE.md` 已经引用它时不重复加载。聊天模式（`--safe-mode`）：AgentDesk 注入 |
+| Codex | `thread/start`、`thread/resume`、`thread/fork` 的 `developerInstructions`；不再传 `baseInstructions`。聊天模式的“不用工具”说明放在规则前面 | Codex 自己读（project doc） |
+| Cursor | 消息前面的 `<agentdesk-rules>…</agentdesk-rules>` 一段，每轮都带 | Cursor 自己读（安装包里按 `AGENTS.md` 加载规则） |
+
+- 全局规则存在数据目录的 `rules.md`，在设置里编辑；节点规则存在会话的 `rules` 字段，在面板底部“节点规则”里编辑。注入文字的顺序：全局 → （需要注入时）项目 → 节点。
+- 项目设置（侧栏项目行的“规则与设置…”）：编辑 `AGENTS.md`；没有 `CLAUDE.md` 时提供“新建只含 `@AGENTS.md` 的 CLAUDE.md”；已有 `CLAUDE.md` 但没引用时只给出那一行让用户自己加，从不修改；列出始终允许的命令，可以删除。
+- 聊天模式的“不用工具”从 `baseInstructions` 移到 `developerInstructions` 后，离线能确认的部分没有变：shell 关闭、沙箱只读、`approval_policy="never"`、所有审批请求都拒绝（测试覆盖）。模型是否仍然不去尝试工具，需要实测。
+- 规则读取都以项目文件夹（`CanvasProject.path`）为准；H2 改用 worktree 后，Claude 和 Codex、Cursor 自己读的是 worktree 里的 `AGENTS.md`（已提交的版本）。
+
+**命令许可（与 H1 约定的存储格式）**：
+- 位置：数据目录 `project-policies/<项目路径 SHA-256 前 12 字节的 hex>.json`，不放在项目里，避免 agent 改自己的权限。读写用 `CommandPolicyStore`（`AgentDeskCore/HarnessRules.swift`）。
+- 格式：`{"version":1,"projectPath":"/abs/path","commands":[{"id":"UUID","provider":"codex","prefix":["git","status"],"createdAt":"ISO8601","sourceSessionID":"UUID?","sourceTitle":"节点标题?"}]}`。命令的 argv 以 `prefix` 开头即匹配（`ProjectCommandPolicy.allows(argv)`），对项目里所有 provider 生效。
+- H1 的接法：用户选“以后这类命令都允许”时，用 Codex 的 `proposedExecpolicyAmendment`（或 Claude 命令的前几个词）调用 `CommandPolicyStore.add`，然后只回 `accept`。**不要**回 `acceptWithExecpolicyAmendment`：Codex 会把它写进用户级的 `~/.codex/rules`，对所有项目生效，AgentDesk 也看不到。之后同一项目的审批请求先查 `allows(argv)`，匹配就自动同意；Claude 可以把规则转成 `--allowedTools`（`CommandPolicyRule.claudeAllowedTool`，形如 `Bash(git status:*)`）。
+- 显示与删除：项目设置里已经接好（H4）。
+
+**待实测**（各 1 回合）：三家各问一次“你现在要遵守哪些规则”，确认全局、项目、节点三层都在；Codex 聊天模式下问一个需要命令才能回答的问题，确认它仍然只用文字回答；改一条全局规则后在同一会话继续，确认 Claude（snapshot off）和 Codex（resume 时的 `developerInstructions`）用上新规则。
+
 验收：
 - 离线测试：注入参数的组合、`CLAUDE.md` 的创建与检测（不覆盖已有内容）。
 - 实际调用：每家 1 回合，问“你现在要遵守哪些项目规则”。
 
 ### H5 · 项目记忆
+
+> **状态（2026-10-30，分支 `claude/harness-rules-memory-dd7429`）：已实现，离线测试通过；实际调用待验证（见下面“待实测”）。**
 
 原则：记忆**看得见、改得了、按项目隔离、由用户批准**。各家 CLI 藏在自己目录里的记忆继续关闭：Codex 保持 `features.memories=false`，Claude 在项目模式下通过 `--settings` 关掉自动记忆，避免三家各记一套、互相矛盾。
 
@@ -260,6 +285,19 @@
   - 模型在回合末尾提出“建议记住”的条目（通过 AgentDesk MCP 的 `memory.propose` 工具），以草稿形式显示在面板里，用户确认后才写入。这和画布的“模型建议的草稿节点”是同一种交互。
 - **读取**：在 `AGENTS.md` 末尾加一行引用 `@.agentdesk/memory.md`（Claude 会展开引用；Codex 和 Cursor 是否展开待验证，不展开的话就把记忆文件作为项目规则的附录注入）。记忆超过预算（例如 4,000 字）时提示用户整理，不自动删除。
 - **跨项目**：只有全局规则（H4 第一层），没有跨项目记忆。
+
+**实施记录**：
+- 条目格式：`### 日期 · 作者 · 来自「节点标题」(会话 ID 前 8 位)`，下一行是 `<!-- agentdesk-memory: ID -->`，然后是正文。作者是“用户”或“模型（Claude Code，sonnet）”。文件里用户自己写的其他内容原样保留；手写的 `### ` 条目也能列出和删除（没有标记时 ID 由标题算出）。`ProjectMemory`（`AgentDeskCore/ProjectMemory.swift`）。
+- “记住这个”：每条已完成的回复下面都有，只在项目画布上出现。点了之后在面板里生成一条可编辑的草稿，“保存到项目记忆”才写入。
+- `memory_propose`（MCP 工具名不能带点，所以不叫 `memory.propose`）：在 `agentdesk-files` 里，项目画布上的节点启动它时带 `--project <文件夹>`；文件夹读取关闭时加 `--no-files`，只剩这个工具。它只把草稿写进数据目录的 `memory-proposals/`（带本次启动的 token），立刻返回，不等用户。App 每秒取一次，显示为面板里的草稿（标明哪个模型建议、理由），确认后才写入。草稿只保留到 App 退出。
+- 第一次写入时，在 `AGENTS.md` 末尾加上 `@.agentdesk/memory.md`（没有 `AGENTS.md` 就新建）；用户删掉这一行后，项目设置里可以再加。
+- 读取：Claude Code 在信任的项目里展开 `@` 引用（`AGENTS.md` 由 `instructionFiles` 加载）；Codex 和 Cursor 不展开（Codex 把 `AGENTS.md` 当作普通 project doc，Cursor 的安装包里也没有展开 `@` 的逻辑），记忆作为项目规则的附录注入；Claude 在聊天模式或 `AGENTS.md` 没有引用时也由 AgentDesk 注入。上下文预览标明是哪一种。
+- 预算：整份文件超过 4,000 字时，面板和项目设置里提示整理，上下文预览里也标出；从不自动删除。项目设置里可以逐条删除。
+- 各家自己的记忆：Codex 保持 `features.memories=false`；Claude Code 两种模式都加 `--settings '{"autoMemoryEnabled":false,…}'`（设置名取自 2.1.308 安装包里的 schema：“When false, Claude will not read from or write to the auto-memory directory”；也有环境变量 `CLAUDE_CODE_DISABLE_AUTO_MEMORY`，没有用）。
+
+**界面检查**：网页部分（节点规则、“记住这个”、记忆草稿、上下文预览的规则列表）在浏览器预览（mock）里点过；`agentdesk-files --no-files --project` 用真实构建离线跑过一次 `initialize` / `tools/list` / `memory_propose`。原生部分（设置里的全局规则、项目设置面板）只编译通过，没有在运行中的 App 里看过。
+
+**待实测**（约 2 回合）：在项目画布的一个节点里让模型调用 `memory_propose`，确认草稿出现在面板里；保存后在另一个节点（换一家 CLI）问这条信息，确认读到了。另外确认 Claude 在 `--safe-mode` 下 `--settings` 和 `--append-system-prompt` 仍然生效，以及 `instructionFiles` 加载的 `AGENTS.md` 会展开 `@.agentdesk/memory.md`。
 
 验收：
 - 离线测试：解析和写入记忆条目、确认草稿、引用的生成。
@@ -285,7 +323,7 @@
 | Cursor 审批 | `--print` 是否有审批回调；它是否读 `AGENTS.md` | 已查 `--help`（2026.10.22）：没有审批回调，H1 用静态规则；是否读 `AGENTS.md` 仍待 1 回合实际调用 |
 | worktree 与原生分叉 | 分叉的子会话换了工作目录后，官方 CLI 是否接受。Claude Code 按工作目录存会话，`--resume <id> --fork-session` 在另一个 worktree 里可能找不到父会话；失败时现有回退会把这条继承线改成回放 | 两家各 1 回合 |
 | 磁盘和性能 | 大仓库每个节点一个 worktree | 先只在“询问 / 自动”档的写入节点创建，只读节点直接用项目目录 |
-| 记忆引用展开 | Codex 和 Cursor 是否展开 `@file` | 各 1 回合 |
+| 记忆引用展开 | Codex 和 Cursor 是否展开 `@file`（安装包里没有展开逻辑，H5 按不展开处理，改为注入附录） | 各 1 回合 |
 
 ## 5. 实施顺序与额度
 
@@ -295,7 +333,7 @@
 | H1 审批 | H0 | 中 | 约 6 回合 |
 | H2 worktree | — | 中 | 约 4 回合 |
 | H3 过程可见与撤销 | H2（检查点依赖 worktree） | 大 | 约 3 回合 |
-| H4 统一规则 | — | 中 | 约 3 回合 |
-| H5 项目记忆 | H4 | 中 | 约 2 回合 |
+| H4 统一规则（已实现，待实测） | — | 中 | 约 3 回合 |
+| H5 项目记忆（已实现，待实测） | H4 | 中 | 约 2 回合 |
 
 H1 和 H2 互不依赖，可以并行开发，例如放到两个分支或两个子会话；H3 在 H2 之后。每个阶段单独成一个分支，合进 `main` 前跑全部离线测试，并按 `AGENTS.md` 重新打包验证。
