@@ -1,0 +1,12 @@
+{"type":"system","subtype":"init","session_id":"c-fixture","cwd":"/wt/b","tools":["Bash","Edit","Read"],"mcp_servers":[],"model":"claude-sonnet-5-5"}
+{"type":"assistant","session_id":"c-fixture","message":{"id":"msg_1","role":"assistant","model":"claude-sonnet-5-5","content":[{"type":"text","text":"先看看文件。"},{"type":"tool_use","id":"toolu_read","name":"Read","input":{"file_path":"/wt/b/README.md"}}]}}
+{"type":"user","session_id":"c-fixture","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_read","content":"     1\t# Demo\n     2\thello\n"}]}}
+{"type":"assistant","session_id":"c-fixture","message":{"id":"msg_2","role":"assistant","model":"claude-sonnet-5-5","content":[{"type":"tool_use","id":"toolu_edit","name":"Edit","input":{"file_path":"/wt/b/README.md","old_string":"hello","new_string":"hello\nworld"}}]}}
+{"type":"user","session_id":"c-fixture","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_edit","content":"The file /wt/b/README.md has been updated."}]}}
+{"type":"assistant","session_id":"c-fixture","message":{"id":"msg_3","role":"assistant","model":"claude-sonnet-5-5","content":[{"type":"tool_use","id":"toolu_test","name":"Bash","input":{"command":"swift test","description":"Run the tests"}}]}}
+{"type":"user","session_id":"c-fixture","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_test","is_error":true,"content":"Exit code 2\nerror: 1 test failed"}]}}
+{"type":"assistant","session_id":"c-fixture","message":{"id":"msg_4","role":"assistant","model":"claude-sonnet-5-5","content":[{"type":"tool_use","id":"toolu_rm","name":"Bash","input":{"command":"rm -rf build"}}]}}
+{"type":"user","session_id":"c-fixture","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_rm","is_error":true,"content":[{"type":"text","text":"Permission to use Bash has been denied."}]}]}}
+{"type":"assistant","session_id":"c-fixture","message":{"id":"msg_5","role":"assistant","model":"claude-sonnet-5-5","content":[{"type":"tool_use","id":"toolu_mcp","name":"mcp__agentdesk-files__list_folder","input":{"path":"/wt/b"}}]}}
+{"type":"user","session_id":"c-fixture","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_mcp","content":[{"type":"text","text":"README.md"}]}]}}
+{"type":"result","subtype":"success","is_error":false,"session_id":"c-fixture","result":"README 已更新。","usage":{"input_tokens":10,"output_tokens":5}}

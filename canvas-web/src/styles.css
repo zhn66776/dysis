@@ -96,6 +96,7 @@ input, textarea { font: inherit; color: var(--tx); }
 .canvas-empty { position: absolute; top: 42%; left: 50%; transform: translate(-50%, -50%); text-align: center; color: var(--mu); pointer-events: none; }
 .empty-title { font-family: var(--serif); font-size: 18px; color: var(--tx); margin-bottom: 4px; }
 .preview-badge { position: absolute; bottom: 12px; right: 14px; z-index: 5; font-size: 11px; color: var(--mu); background: var(--card); border: 1px solid var(--bd); border-radius: 6px; padding: 2px 8px; }
+.notice-banner { position: absolute; top: 44px; left: 50%; transform: translateX(-50%); z-index: 20; display: flex; gap: 8px; align-items: center; max-width: 70%; background: var(--card); color: var(--tx); border: 1px solid var(--bd2); border-radius: 10px; padding: 6px 8px 6px 12px; user-select: text; box-shadow: 0 4px 16px rgba(0,0,0,.12); }
 .error-banner { position: absolute; top: 44px; left: 50%; transform: translateX(-50%); z-index: 20; display: flex; gap: 8px; align-items: center; max-width: 70%; background: var(--bad-bg); color: var(--bad); border: 1px solid var(--bad); border-radius: 10px; padding: 6px 8px 6px 12px; user-select: text; }
 
 .menu { position: absolute; z-index: 30; width: 220px; background: var(--card); border: 1px solid var(--bd2); border-radius: 12px; padding: 6px; box-shadow: 0 8px 24px rgba(0,0,0,0.12); }
@@ -273,6 +274,7 @@ input, textarea { font: inherit; color: var(--tx); }
 .modal-backdrop { position: fixed; inset: 0; z-index: 100; display: grid; place-items: center; background: rgba(43, 42, 38, 0.18); }
 .modal { width: 380px; max-width: calc(100% - 32px); background: var(--card); border: 1px solid var(--bd2); border-radius: var(--r); padding: 18px 18px 14px; box-shadow: 0 12px 32px rgba(0,0,0,0.16); user-select: text; }
 .modal-title { font-size: 14px; font-weight: 600; margin-bottom: 6px; }
+.modal-check { display: flex; gap: 6px; align-items: center; margin-top: 10px; font-size: 12px; }
 .modal-detail { font-size: 12px; color: var(--mu); line-height: 1.55; }
 .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
 .modal-actions .btn:focus-visible { outline: 1.5px solid var(--ring); outline-offset: 1px; }
@@ -391,3 +393,41 @@ input, textarea { font: inherit; color: var(--tx); }
 .harness-settings { margin: 12px 0 0; flex-shrink: 0; padding: 8px 10px; border-radius: 8px; background: var(--chip); font-size: 12px; }
 .harness-title { font-weight: 600; margin-bottom: 4px; }
 .harness-line { line-height: 1.6; color: var(--tx); word-break: break-all; }
+/* Worktrees (HARNESS.md H2) */
+.worktree-row { display: flex; align-items: center; gap: 6px; padding: 6px 14px; border-bottom: 1px solid var(--bd); flex-wrap: wrap; }
+.worktree-row .chip { max-width: 60%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.upstream-item { display: inline-flex; gap: 4px; align-items: center; }
+.diff-toggle { cursor: pointer; opacity: .75; }
+.diff-toggle.on { opacity: 1; font-weight: 600; }
+.node-foot .branch { margin-left: 6px; opacity: .8; }
+
+/* Steps and turn diffs (HARNESS.md H3) */
+.steps { margin: 2px 0 8px; display: flex; flex-direction: column; gap: 2px; }
+.steps-toggle { align-self: flex-start; font-size: 12px; }
+.step { border: 1px solid var(--bd); border-radius: 8px; background: var(--panel); font-size: 12px; }
+.step-head { display: flex; gap: 6px; align-items: center; width: 100%; padding: 4px 8px; background: none; border: 0; color: inherit; text-align: left; cursor: pointer; font: inherit; }
+.step-head:disabled { cursor: default; }
+.step-caret { width: 10px; color: var(--mu2); }
+.step-kind { flex: none; padding: 0 5px; border-radius: 5px; background: var(--chip); color: var(--mu); font-size: 11px; }
+.step-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--mono); font-size: 11.5px; }
+.step-exit { flex: none; font-size: 11px; color: var(--ok); }
+.step-exit.bad, .step-failed .step-state { color: var(--bad); }
+.step-state { flex: none; font-size: 11px; color: var(--mu2); }
+.step-running .step-state { color: var(--run); }
+.step-declined .step-state { color: var(--mu); text-decoration: line-through; }
+.step-body { padding: 0 8px 8px 24px; display: flex; flex-direction: column; gap: 6px; }
+.step-detail { color: var(--mu); white-space: pre-wrap; font-size: 11.5px; }
+.step-output, .diff-text { margin: 0; max-height: 280px; overflow: auto; padding: 6px 8px; border-radius: 6px; background: var(--chip); font-family: var(--mono); font-size: 11px; line-height: 1.45; white-space: pre; user-select: text; }
+.dl-add { color: var(--ok); }
+.dl-del { color: var(--bad); }
+.dl-hunk { color: var(--run); }
+.dl-head { color: var(--mu2); }
+.turn-actions { margin-top: 2px; }
+.node-changes { font-size: 11px; color: var(--mu); padding: 0 12px 6px; font-family: var(--mono); }
+.changes-modal { width: min(860px, 92vw); max-height: 82vh; display: flex; flex-direction: column; }
+.changes-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
+.changes-list { overflow: auto; display: flex; flex-direction: column; gap: 4px; }
+.changes-file { border: 1px solid var(--bd); border-radius: 8px; }
+.changes-file-head { display: flex; gap: 8px; align-items: center; width: 100%; padding: 5px 8px; background: none; border: 0; color: inherit; text-align: left; cursor: pointer; font: inherit; font-size: 12px; }
+.changes-path { flex: 1; font-family: var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.changes-file .diff-text { max-height: none; border-radius: 0 0 8px 8px; }

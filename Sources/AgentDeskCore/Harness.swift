@@ -41,9 +41,20 @@ public enum HarnessMode: Equatable, Sendable {
     /// The single place that decides the mode: a trusted project whose
     /// folder is the conversation's working directory, at the board's level
     /// or the node's lower one.
-    public static func resolve(project: CanvasProject?, nodeLevel: PermissionLevel?, workingDirectory: String) -> HarnessMode {
-        guard let project, let level = project.level, project.path == workingDirectory else { return .chat }
+    /// `writable`, when the canvas gives it, replaces the folder check: a node
+    /// writes in its own worktree, and a node that may not write this turn chats.
+    public static func resolve(project: CanvasProject?, nodeLevel: PermissionLevel?, workingDirectory: String, writable: Bool? = nil) -> HarnessMode {
+        guard let project, let level = project.level, writable ?? (project.path == workingDirectory) else { return .chat }
         return .project(min(level, nodeLevel ?? level))
+    }
+}
+
+extension HarnessMode {
+    /// A canvas node's mode between turns: its own worktree counts as the
+    /// project folder, and a merge node without one only reads (as `CanvasWriteAccess`).
+    public static func resolve(board: CanvasBoard, node: CanvasNode, session: ChatSession) -> HarnessMode {
+        let writable: Bool? = node.worktree.map { $0.workingDirectory == session.workingDirectory } ?? (node.merge != nil ? false : nil)
+        return resolve(project: board.project, nodeLevel: node.permissionLevel, workingDirectory: session.workingDirectory, writable: writable)
     }
 }
 

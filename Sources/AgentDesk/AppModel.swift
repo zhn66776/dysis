@@ -16,6 +16,8 @@ final class AppModel: ObservableObject {
     @Published var isChecking: Set<ProviderID> = []
     @Published var activeStatus: [UUID: String] = [:]
     @Published var errorMessage: String?
+    /// A neutral result to show once (a merge done, a turn that only reads).
+    @Published var noticeMessage: String?
     /// Latest subscription usage per provider, kept for this launch only.
     @Published var quotas: [ProviderID: ProviderQuota] = [:]
     private var quotaReadAt: [ProviderID: Date] = [:]
@@ -26,6 +28,9 @@ final class AppModel: ObservableObject {
     private var tasks: [UUID: Task<Void, Never>] = [:]
     private var storageReadable = true
     private var lastStreamSave: [UUID: Date] = [:]
+    /// Latest provider-reported turn diff per streaming reply (Codex), saved when the turn ends.
+    private var turnDiffs: [UUID: String] = [:]
+    var diffStore: TurnDiffStore { TurnDiffStore(root: dataRoot) }
     let plaza: PlazaModel
     let attachmentDrafts: AttachmentDrafts
     let folderAccess: FolderAccessCenter
@@ -92,6 +97,13 @@ final class AppModel: ObservableObject {
         persist()
     }
 
+    /// A merge node that got a worktree works there from its next turn.
+    func setWorkingDirectory(_ id: UUID, path: String) {
+        guard storageReadable, !runningSessionIDs.contains(id), let i = sessions.firstIndex(where: { $0.id == id }) else { return }
+        sessions[i].workingDirectory = path
+        persist()
+    }
+
     func setSessionEffort(_ id: UUID, effort: String?) {
         guard storageReadable, !runningSessionIDs.contains(id), let i = sessions.firstIndex(where: { $0.id == id }) else { return }
         sessions[i].reasoningEffort = effort
@@ -139,6 +151,7 @@ final class AppModel: ObservableObject {
         sessions.removeAll { $0.id == id }
         folderAccess.forget(session: id)
         approvals.forget(session: id)
+        diffStore.remove(session: id)
         if selectedSessionID == id { selectedSessionID = sessions.first?.id }
         persist()
     }
@@ -180,7 +193,11 @@ final class AppModel: ObservableObject {
     @discardableResult
     /// `project` is the board's folder: once trusted, the provider works there
     /// at the board's permission level, or the node's lower `nodeLevel`.
-    func send(_ text: String, to id: UUID, context: CanvasPromptContext = .init(), project: CanvasProject? = nil, nodeLevel: PermissionLevel? = nil) -> Bool {
+    /// `writable`, when given, decides whether this turn may write at all (the canvas:
+    /// a node's own worktree, one writer per shared folder).
+    /// `assistantID` and `checkpoint` name the reply and the worktree commit made before it (undo, H3).
+    func send(_ text: String, to id: UUID, context: CanvasPromptContext = .init(), project: CanvasProject? = nil, nodeLevel: PermissionLevel? = nil,
+              writable: Bool? = nil, assistantID: UUID = UUID(), checkpoint: String? = nil) -> Bool {
         guard storageReadable,
               let index = sessions.firstIndex(where: { $0.id == id }), !runningSessionIDs.contains(id) else { return false }
         guard !attachmentDrafts.importing.contains(id) else { return false }
@@ -214,12 +231,13 @@ final class AppModel: ObservableObject {
         if sessions[index].messages.isEmpty {
             sessions[index].title = String(prompt.replacingOccurrences(of: "\n", with: " ").prefix(32))
         }
-        let assistantID = UUID()
         sessions[index].messages.append(ChatMessage(role: .user, text: prompt, attachments: attachments.isEmpty ? nil : attachments, contextSources: context.isEmpty && context.fork == nil ? nil : context.sourceLabels))
-        sessions[index].messages.append(ChatMessage(id: assistantID, role: .assistant, text: "", state: .streaming))
+        var reply = ChatMessage(id: assistantID, role: .assistant, text: "", state: .streaming)
+        reply.checkpoint = checkpoint
+        sessions[index].messages.append(reply)
         sessions[index].updatedAt = Date()
         let session = sessions[index]
-        let mode = HarnessMode.resolve(project: project, nodeLevel: nodeLevel, workingDirectory: session.workingDirectory)
+        let mode = HarnessMode.resolve(project: project, nodeLevel: nodeLevel, workingDirectory: session.workingDirectory, writable: writable)
         let level = mode.level ?? .auto
         // Claude Code asks through the files helper; Codex asks in process.
         let approvalFolder = provider == .claude && mode != .chat && level != .auto ? session.workingDirectory : nil
@@ -256,6 +274,11 @@ final class AppModel: ObservableObject {
                     case .turnID(let turn): self.sessions[i].messages[m].providerTurnID = turn
                     case .contextUsage(let usage): self.sessions[i].contextUsage = usage
                     case .quota(let quota): self.quotas[provider] = quota
+                    case .step(let step):
+                        var steps = self.sessions[i].messages[m].steps ?? []
+                        steps.apply(step)
+                        self.sessions[i].messages[m].steps = steps
+                    case .turnDiff(let diff): self.turnDiffs[assistantID] = diff
                     case .completed:
                         completed = true
                         self.sessions[i].messages[m].state = .complete
@@ -277,6 +300,7 @@ final class AppModel: ObservableObject {
                 }
             }
             self.approvals.cancel(session: id)
+            self.finishTurn(sessionID: id, messageID: assistantID)
             self.runningSessionIDs.remove(id)
             self.activeStatus.removeValue(forKey: id)
             self.tasks.removeValue(forKey: id)
@@ -284,6 +308,41 @@ final class AppModel: ObservableObject {
             self.persist()
         }
         return true
+    }
+
+    /// No step stays running after a turn; a provider-reported diff is saved
+    /// (the canvas replaces it with its own `git diff` for worktree nodes).
+    private func finishTurn(sessionID: UUID, messageID: UUID) {
+        guard let i = sessions.firstIndex(where: { $0.id == sessionID }), let m = sessions[i].messages.firstIndex(where: { $0.id == messageID }) else { return }
+        if var steps = sessions[i].messages[m].steps {
+            steps.settle(failed: sessions[i].messages[m].state != .complete)
+            sessions[i].messages[m].steps = steps
+        }
+        if let diff = turnDiffs.removeValue(forKey: messageID), !diff.isEmpty, (try? diffStore.save(diff, session: sessionID, message: messageID)) != nil {
+            sessions[i].messages[m].diffStat = DiffStat.parse(unified: diff)
+        }
+    }
+
+    /// The canvas's own diff of a turn (worktree vs checkpoint).
+    func setTurnDiff(sessionID: UUID, messageID: UUID, diff: String) {
+        guard let i = sessions.firstIndex(where: { $0.id == sessionID }), let m = sessions[i].messages.firstIndex(where: { $0.id == messageID }) else { return }
+        if diff.isEmpty { sessions[i].messages[m].diffStat = nil; persist(); return }
+        do {
+            try diffStore.save(diff, session: sessionID, message: messageID)
+            sessions[i].messages[m].diffStat = DiffStat.parse(unified: diff)
+        } catch { errorMessage = "本回合 diff 保存失败：\(error.localizedDescription)" }
+        persist()
+    }
+
+    /// Undo in place (Codex): the reverted turn and everything after it leave the local history too.
+    func dropMessages(sessionID: UUID, from messageID: UUID) {
+        guard !runningSessionIDs.contains(sessionID), let i = sessions.firstIndex(where: { $0.id == sessionID }),
+              let m = sessions[i].messages.firstIndex(where: { $0.id == messageID }) else { return }
+        // The user message that asked for the turn goes with it.
+        let start = m > 0 && sessions[i].messages[m - 1].role == .user ? m - 1 : m
+        sessions[i].messages.removeSubrange(start...)
+        sessions[i].updatedAt = Date()
+        persist()
     }
 
     func stop(sessionID: UUID) {

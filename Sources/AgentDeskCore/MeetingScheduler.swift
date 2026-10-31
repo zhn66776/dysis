@@ -416,7 +416,7 @@ public struct MeetingScheduler: Sendable {
                                 throw MeetingTurnFailure(message: "输出达到单次发言上限，已停止本次发言。", sessionID: snapshot.sessionID, text: snapshot.text, timedOut: false)
                             }
                         case .status: break
-                        case .actualModels, .turnID, .contextUsage, .quota: break
+                        case .actualModels, .turnID, .contextUsage, .quota, .step, .turnDiff: break
                         case .completed: await accumulator.markCompleted()
                         }
                     }

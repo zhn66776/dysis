@@ -12,9 +12,36 @@ export type PermissionLevel = 'readOnly' | 'ask' | 'auto'
 export type HarnessMode = 'chat' | PermissionLevel
 
 /** A board's project folder; trusted is null until asked; level is set once trusted. */
-export interface BoardProject { path: string; name: string; trusted: boolean | null; missing: boolean; level?: PermissionLevel | null }
+export interface BoardProject {
+  path: string; name: string; trusted: boolean | null; missing: boolean; level?: PermissionLevel | null
+  /** In a git work tree: trusted boards give each node a worktree. */
+  git?: boolean
+}
 /** waiting: nodes waiting for an approval. */
 export interface BoardSummary { id: string; title: string; nodeCount: number; project?: BoardProject | null; waiting?: number }
+/** A board's project folder; trusted is null until asked. */
+export interface BoardProject {
+  path: string; name: string; trusted: boolean | null; missing: boolean
+  /** In a git work tree: trusted boards give each node a worktree. */
+  git?: boolean
+}
+
+/** Files changed and lines added/removed. */
+export interface DiffStat { files: number; added: number; removed: number }
+
+export type StepKind = 'command' | 'fileChange' | 'mcp' | 'read' | 'search' | 'web' | 'other'
+export type StepState = 'running' | 'done' | 'failed' | 'declined'
+/** One tool step of a reply (HARNESS.md H3); output keeps its first and last 4 KB. */
+export interface StepPayload { id: string; kind: StepKind; title: string; detail?: string; state: StepState; output?: string; exitCode?: number; diff?: string }
+
+/** A node's own git worktree (HARNESS.md H2). */
+export interface WorktreePayload {
+  branch: string
+  base?: string
+  path: string
+  /** Cleaned up; the next send recreates it from the branch. */
+  missing: boolean
+}
 
 export interface NodePayload {
   id: string
@@ -35,6 +62,9 @@ export interface NodePayload {
   mode?: HarnessMode
   /** The node's own lower level, when set. */
   nodeLevel?: PermissionLevel
+  worktree?: WorktreePayload
+  /** What the node's branch changed since it was cut. */
+  changes?: DiffStat
 }
 
 export type FileKind = 'image' | 'pdf' | 'document' | 'text'
@@ -63,6 +93,8 @@ export interface EdgePayload {
   /** Data edges: the source has a reply the target has not received yet. */
   sourceMessageID?: string
   pending?: boolean
+  /** Data edges: also deliver the source's branch diff summary. */
+  includeDiff?: boolean
 }
 
 export interface CanvasGroup { id: string; title: string; nodeIDs: string[] }
@@ -115,6 +147,11 @@ export interface MessagePayload {
   actualModels?: string[]
   attachments?: string[]
   contextSources?: string[]
+  steps?: StepPayload[]
+  /** What this turn changed; the full diff comes with `turn.diff`. */
+  diffStat?: DiffStat
+  /** A checkpoint was taken before this turn, so it can be undone. */
+  undoable?: boolean
 }
 
 export interface SessionDetail { id: string; messages: MessagePayload[] }
@@ -136,6 +173,8 @@ export interface StatePayload {
   chain: Chain
   running: string[]
   error: string
+  /** A neutral result to show once (merge done, a read-only turn). */
+  notice?: string
   fitBoardID?: string
   focusNodeID?: string
 }
@@ -143,7 +182,7 @@ export interface StatePayload {
 export interface ComposerInsert { type: 'composer.insert'; sessionID: string; text: string }
 
 /** Swift asks for an explicit yes before a destructive or call-spending action. */
-export interface ConfirmShow { type: 'confirm.show'; id: string; title: string; detail: string; action: string }
+export interface ConfirmShow { type: 'confirm.show'; id: string; title: string; detail: string; action: string; checkbox?: string }
 
 /** Height of the transparent title bar and where the traffic lights end, in CSS px (0 in full screen). */
 export interface ChromeInsets { type: 'chrome'; top: number; left: number }
@@ -168,7 +207,8 @@ export interface ApprovalShow {
 }
 /** Answered elsewhere, timed out, or the turn stopped. */
 export interface ApprovalHide { type: 'approval.hide'; id: string }
-export type Incoming = StatePayload | ComposerInsert | ConfirmShow | ChromeInsets | SearchResults | ContextPreview | ApprovalShow | ApprovalHide
+export interface TurnDiff { type: 'turn.diff'; id: string; sessionID: string; messageID: string; diff: string }
+export type Incoming = StatePayload | ComposerInsert | ConfirmShow | ChromeInsets | SearchResults | ContextPreview | ApprovalShow | ApprovalHide | TurnDiff
 
 export type Command =
   | { type: 'ready' }
@@ -210,7 +250,13 @@ export type Command =
   | { type: 'node.rerun'; boardID: string; nodeID: string }
   | { type: 'chain.downstream'; boardID: string; nodeID: string }
   | { type: 'chain.stop' }
-  | { type: 'confirm.answer'; id: string; ok: boolean }
+  | { type: 'confirm.answer'; id: string; ok: boolean; checked?: boolean }
+  | { type: 'node.mergeToBase' | 'node.combine' | 'node.revealWorktree'; boardID: string; nodeID: string }
+  | { type: 'edge.setDiff'; boardID: string; edgeID: string; ok: boolean }
+  | { type: 'board.gitInit'; boardID: string }
+  | { type: 'notice.dismiss' }
+  | { type: 'turn.diff'; id: string; sessionID: string; messageID: string }
+  | { type: 'turn.undo'; boardID: string; nodeID: string; messageID: string }
   | { type: 'approval.answer'; id: string; decision: ApprovalDecision }
   | { type: 'board.setLevel'; boardID: string; level: PermissionLevel }
   | { type: 'node.setLevel'; boardID: string; nodeID: string; level: PermissionLevel | null }
@@ -229,6 +275,7 @@ export interface AppState {
   details: Record<string, SessionDetail>
   running: Set<string>
   error: string
+  notice: string
   fitBoardID?: string
   focusNodeID?: string
   models: Partial<Record<Provider, ModelOption[]>>

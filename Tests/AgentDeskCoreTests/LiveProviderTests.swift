@@ -208,7 +208,7 @@ private struct TurnBudget {
                     case .contextUsage(let usage): turn.contextUsage = usage
                     case .quota(let quota): turn.quota = quota; turn.quotaEvents += 1
                     case .completed: turn.completed = true
-                    case .status, .actualModels: break
+                    case .status, .actualModels, .step, .turnDiff: break
                     }
                 }
                 return turn

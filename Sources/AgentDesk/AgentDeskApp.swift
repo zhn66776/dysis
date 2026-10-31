@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import AgentDeskCore
 
 @main
 struct AgentDeskApp: App {
@@ -13,9 +14,14 @@ struct AgentDeskApp: App {
         if let i = args.firstIndex(of: "--data-dir"), args.indices.contains(i + 1) {
             root = URL(fileURLWithPath: args[i + 1], isDirectory: true)
         }
+        // Test runs put node worktrees elsewhere too, next to their --data-dir.
+        var worktrees = NodeWorktree.defaultRoot
+        if let i = args.firstIndex(of: "--worktrees-dir"), args.indices.contains(i + 1) {
+            worktrees = URL(fileURLWithPath: args[i + 1], isDirectory: true)
+        }
         let app = AppModel(root: root)
         _model = StateObject(wrappedValue: app)
-        _canvas = StateObject(wrappedValue: CanvasModel(app: app))
+        _canvas = StateObject(wrappedValue: CanvasModel(app: app, worktreeRoot: worktrees))
     }
 
     var body: some Scene {
@@ -51,7 +57,7 @@ struct AgentDeskApp: App {
                 }
             }
         }
-        Settings { SettingsView(model: model).frame(width: 720, height: 650).transparentTitleBar() }
+        Settings { SettingsView(model: model, canvas: canvas).frame(width: 720, height: 650).transparentTitleBar() }
     }
 }
 

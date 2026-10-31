@@ -114,6 +114,7 @@ public struct ClaudeBackend: AgentBackend, Sendable {
                             if let status = parsed.status, !status.isEmpty {
                                 continuation.yield(.status(status))
                             }
+                            for step in ClaudeStepParser.steps(object) { continuation.yield(.step(step)) }
                             if let models = parsed.actualModelIDs, !models.isEmpty {
                                 if object["type"] as? String == "assistant" {
                                     replyModels.formUnion(models)

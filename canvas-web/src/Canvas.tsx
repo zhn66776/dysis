@@ -97,7 +97,7 @@ export function Canvas({ state, selectedNodeID, onSelect, expanded, onExpand, on
           ...base, type: 'chat',
           data: {
             summary: state.summaries[n.sessionID], inherited: Boolean(n.inherited), nativeFork: n.inherited?.mode === 'native',
-            merge: n.merge, stale: n.stale, downstream: n.downstream, chainCurrent: runningChain?.currentNodeID === n.id,
+            merge: n.merge, stale: n.stale, downstream: n.downstream, chainCurrent: runningChain?.currentNodeID === n.id, branch: n.worktree?.branch, changes: n.changes,
             picked: picked.includes(n.id), expanded: expanded.includes(n.id), mode: n.mode,
             reading: latestReadable(state.details[n.sessionID]?.messages),
             onExpand: () => actions.current.onExpand(n.id), onFollowUp: () => actions.current.onFollowUp(n.id),
