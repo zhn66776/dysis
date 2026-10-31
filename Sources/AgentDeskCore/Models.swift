@@ -3,9 +3,16 @@ import Foundation
 public enum ProviderID: String, Codable, CaseIterable, Identifiable, Sendable {
     case claude, codex, grok, gemini
     public var id: String { rawValue }
+    /// The harness that actually runs the node (design/HARNESS.md H0).
     public var name: String {
-        switch self { case .claude: return "Claude"; case .codex: return "ChatGPT"; case .grok: return "Grok"; case .gemini: return "Gemini" }
+        switch self { case .claude: return "Claude Code"; case .codex: return "Codex"; case .grok: return "Cursor · Grok"; case .gemini: return "Cursor · Gemini" }
     }
+    /// The subscription the official CLI signs in with.
+    public var account: String {
+        switch self { case .claude: return "Claude 订阅"; case .codex: return "ChatGPT 账号"; case .grok, .gemini: return "Cursor 订阅" }
+    }
+    /// e.g. "Codex · ChatGPT 账号".
+    public var subtitle: String { "\(name) · \(account)" }
     public var runtimeName: String {
         switch self { case .claude: return "Claude Code"; case .codex: return "Codex"; case .grok, .gemini: return "Cursor" }
     }
@@ -150,9 +157,16 @@ public struct AgentRequest: Sendable {
     /// The working directory is the user's own folder (a project), not a
     /// workspace AgentDesk made: files there that AgentDesk did not write are left alone.
     public let userFolder: Bool
-    public init(localSessionID: UUID, remoteSessionID: String?, prompt: String, workingDirectory: URL, modelID: String, executableURL: URL, reasoningEffort: String? = nil, images: [AgentImageInput] = [], forkFrom: AgentFork? = nil, mcpServers: [AgentMCPServer] = [], projectAccess: Bool = false, userFolder: Bool = false) {
+    /// With `projectAccess`: what runs without asking. Anything else goes to
+    /// `approver` (Codex) or AgentDesk's approval tool (Claude Code).
+    public let permissionLevel: PermissionLevel
+    /// Asks the user about one action; no approver means every such action is declined.
+    public let approver: AgentApprover?
+    public init(localSessionID: UUID, remoteSessionID: String?, prompt: String, workingDirectory: URL, modelID: String, executableURL: URL, reasoningEffort: String? = nil, images: [AgentImageInput] = [], forkFrom: AgentFork? = nil, mcpServers: [AgentMCPServer] = [], projectAccess: Bool = false, userFolder: Bool = false, permissionLevel: PermissionLevel = .auto, approver: AgentApprover? = nil) {
         self.mcpServers = mcpServers
         self.projectAccess = projectAccess
+        self.permissionLevel = permissionLevel
+        self.approver = approver
         self.userFolder = userFolder || projectAccess
         self.localSessionID = localSessionID; self.remoteSessionID = remoteSessionID; self.prompt = prompt; self.workingDirectory = workingDirectory; self.modelID = modelID; self.executableURL = executableURL
         self.reasoningEffort = reasoningEffort

@@ -66,10 +66,8 @@ private struct ProviderSettingsSection: View {
                 VStack(alignment: .leading, spacing: 1) {
                     Text(provider.name)
                         .font(Theme.sans(13, weight: .medium))
-                    if model.developerModeEnabled {
-                        Text(provider.runtimeName)
-                            .metaText()
-                    }
+                    Text(provider.account)
+                        .metaText()
                 }
                 Spacer()
                 StatusPill(text: model.statusByProvider[provider] ?? "Not checked")

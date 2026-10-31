@@ -71,6 +71,12 @@
 
 验收：界面上不再出现“ChatGPT 写代码”这种说法。前端测试覆盖显示名映射。
 
+> **状态：已实现**（分支 `claude/harness-approvals-8d42e0`，2026-10-30）。
+> - `ProviderID.name` 改成 harness 名称，另加 `account`、`subtitle`。原生界面（设置、错误提示、信任对话框）和画布（新节点菜单、面板副标题、合流选择）都用新名称。
+> - 模式只在 `HarnessMode.resolve`（`Harness.swift`）里计算一次，发送、节点卡片、面板和上下文预览共用。H2 换工作目录时只需要改这一处。
+> - “本轮的 harness 设置”由 `HarnessSummary` 生成，列出 harness 和账号、模式、权限、工作目录，以及在文件夹里实际找到的规则文件。
+> - 测试：`HarnessApprovalTests`，以及前端的 `harness.test.ts`。
+
 ### H1 · 权限审批（必要）
 
 **三档模式**，按项目设置，节点可以单独调低：
@@ -107,6 +113,47 @@
 验收：
 - 离线测试：每家 CLI 的参数组合、Codex 审批请求到答复的映射、Claude 审批工具的往返（用假的请求文件）。
 - 实际调用（需要额度许可）：每家各 1 回合，触发一次命令审批，分别验证拒绝和允许。
+
+> **状态：已实现，离线测试通过，尚未做实际调用**（分支 `claude/harness-approvals-8d42e0`，2026-10-30）。
+>
+> 离线查到的事实：
+> - Codex 0.165（`codex app-server generate-json-schema`）：
+>   - `AskForApproval` 的取值是 `untrusted | on-request | never`，或者 `granular`。
+>   - 命令审批的答复是 `accept | acceptForSession | acceptWithExecpolicyAmendment | applyNetworkPolicyAmendment | decline | cancel`；文件审批是 `accept | acceptForSession | decline | cancel`。
+>   - `approvalsReviewer` 可以是 `user | auto_review | guardian_subagent`。
+>   - `item/fileChange/requestApproval` 只带 `itemId`、`reason`、`grantRoot`，diff 来自同一 item 的 `changes[].diff`。
+> - Claude Code 2.1.308：`--permission-mode` 列出的是 `acceptEdits | auto | bypassPermissions | manual | dontAsk | plan`，`default` 仍然接受（`manual` 的旧名）。`--permission-prompts host|none` 已公开，`--permission-prompt-tool` 是隐藏参数但可用。
+> - Cursor agent 2026.10.22：`--print` 没有审批回调，没有 prompt tool，也没有 stdin 审批；`--auto-review` 依赖服务器分类器，不能把问题交给 AgentDesk。
+>
+> 实现：
+> - 档位：`CanvasProject.permissionLevel`，节点用 `CanvasNode.permissionLevel`。新信任的项目是“询问”；旧项目没有这个字段，读出来是“自动”。
+> - Codex：
+>   - 询问 = `workspace-write`、不联网、`approvalPolicy: "untrusted"`；
+>   - 只读 = `read-only` 沙箱，加 `untrusted`；
+>   - 自动 = 现状。
+>   - 低于自动时同时发 `approvalsReviewer: "user"`。
+>   - 注意：`untrusted` 下打补丁也会询问，所以在 Codex 上，“询问”档改 worktree 内的文件也会问。这比表格严格，因为 Codex 没有按类别区分的取值。
+> - Claude：
+>   - `--permission-mode default`，加上 `--allowedTools` 预先放行 `Read(./**)`、Glob、Grep、LS、TodoWrite，“询问”档再加 `Edit(./**)`，以及打开的 MCP 服务器；
+>   - 其余操作走 `mcp__agentdesk_files__approve`。辅助程序带 `--approvals <目录>` 启动；文件夹访问关闭时再加 `--no-files`。
+>   - 请求和答复放在数据目录的 `approval-requests/`，“本会话内都允许”记在 `approval-grants/`（同一条命令、同一个文件、同一个网站，其余按工具名）。
+> - Cursor：
+>   - 询问 = agent 模式、开沙箱，`cli.json` 允许 `Read(**)`、`Write(**)`，拒绝 `Shell(*)`；
+>   - 只读 = `--mode ask`；
+>   - 项目里已有自己的 `cli.json` 时不改它，这一轮按只读运行，并给出提示。
+> - 界面：
+>   - 桥接消息 `approval.show`、`approval.hide`、`approval.answer`；
+>   - 卡片在节点面板顶部，节点上显示“等你确认”标记，状态是“等待确认”，侧栏按画布计数；
+>   - 120 秒没有回答或停止回合，都算拒绝。
+>   - 档位在侧栏切换，改成“自动”前会确认；节点在面板的模式菜单里调低。
+>
+> 还需要的实际调用（约 6 回合，需要额度许可）：
+> 1. Claude，“询问”档：触发一次 `Bash` 审批并拒绝，确认模型继续回答、没有执行命令。
+> 2. Claude，“询问”档：同一命令点“本会话内都允许”，确认第二次不再询问。另外确认 `--permission-prompt-tool` 在 `-p` 下确实被调用，超时设置也生效。
+> 3. Codex，“询问”档：触发命令审批并拒绝，确认 `decline` 后回合继续。
+> 4. Codex，“询问”档：触发文件改动审批并允许，确认补丁被应用、卡片里有 diff。
+> 5. Cursor，“询问”档：让它运行命令，确认被 `Shell(*)` 拒绝、提示出现；再改一个项目文件，确认能写。
+> 6. 任意一家，“自动”档的旧项目：确认行为和以前一样，不出现审批卡片。
 
 ### H2 · 每段对话一个 worktree（必要）
 
@@ -218,9 +265,9 @@
 
 | 项目 | 说明 | 怎么验证 |
 |---|---|---|
-| Codex 按需审批的取值 | `approvalPolicy` 的具体取值和沙箱的配合，各版本可能不同 | 读当前 schema，离线启动 app-server 的 `thread/start`（不发消息） |
+| Codex 按需审批的取值 | `approvalPolicy` 的具体取值和沙箱的配合，各版本可能不同 | 已读 0.165 的 schema（见 H1 状态）；沙箱和 `untrusted` 的实际配合仍要 1 回合实际调用 |
 | Claude `--permission-prompt-tool` 与 `--permission-prompts host` 的组合 | print 模式下的行为、超时、拒绝后模型是否继续 | 1 回合实际调用 |
-| Cursor 审批 | `--print` 是否有审批回调；它是否读 `AGENTS.md` | 查文档和 `--help`，再用 1 回合实际调用 |
+| Cursor 审批 | `--print` 是否有审批回调；它是否读 `AGENTS.md` | 已查 `--help`（2026.10.22）：没有审批回调，H1 用静态规则；是否读 `AGENTS.md` 仍待 1 回合实际调用 |
 | worktree 与原生分叉 | 分叉的子会话换了工作目录后，官方 CLI 是否接受 | 两家各 1 回合 |
 | 磁盘和性能 | 大仓库每个节点一个 worktree | 先只在“询问 / 自动”档的写入节点创建，只读节点直接用项目目录 |
 | 记忆引用展开 | Codex 和 Cursor 是否展开 `@file` | 各 1 回合 |

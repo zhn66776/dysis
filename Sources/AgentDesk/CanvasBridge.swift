@@ -9,9 +9,12 @@ import AgentDeskCore
 // turns stays on this side.
 
 struct BridgeBoardSummary: Encodable, Equatable {
-    struct Project: Encodable, Equatable { let path: String; let name: String; let trusted: Bool?; let missing: Bool }
+    /// `level`: the permission level once trusted (PermissionLevel raw value).
+    struct Project: Encodable, Equatable { let path: String; let name: String; let trusted: Bool?; let missing: Bool; let level: String? }
     let id: UUID; let title: String; let nodeCount: Int
     let project: Project?
+    /// Nodes waiting for the user to answer an approval.
+    let waiting: Int
 }
 
 struct BridgeNode: Encodable, Equatable {
@@ -30,6 +33,25 @@ struct BridgeNode: Encodable, Equatable {
     let downstream: Int
     /// Files and MCP result nodes; nil for chat nodes.
     let source: BridgeSource?
+    /// Chat nodes: HarnessMode.key ("chat", "readOnly", "ask", "auto").
+    let mode: String?
+    /// The node's own lower level, when set.
+    let nodeLevel: String?
+}
+
+/// One approval card (`approval.show`); see ApprovalCenter.
+struct BridgeApproval: Encodable, Equatable {
+    let type = "approval.show"
+    let id: UUID, sessionID: UUID, kind: String, title: String
+    let command: String?, cwd: String?, files: [String], diff: String?, reason: String?, sessionScope: String?
+    let expiresAt: Double
+
+    init(_ p: ApprovalCenter.Pending) {
+        let r = p.request
+        id = r.id; sessionID = r.sessionID; kind = r.kind.rawValue; title = r.title
+        command = r.command; cwd = r.cwd.map { NSString(string: $0).abbreviatingWithTildeInPath }; files = r.files.map { NSString(string: $0).abbreviatingWithTildeInPath }
+        diff = r.diff; reason = r.reason; sessionScope = r.sessionScope; expiresAt = p.expiresAt.timeIntervalSince1970 * 1000
+    }
 }
 
 struct BridgeSource: Encodable, Equatable {
@@ -129,6 +151,8 @@ struct BridgeCommand: Decodable {
     var id: UUID?, ok: Bool?
     /// `chrome.regions`: page areas (CSS px from the top-left) that move the window, and controls inside them that do not.
     var drag: [Rect]?, noDrag: [Rect]?
+    /// `approval.answer`: "once", "conversation" or "deny". `board.setLevel` / `node.setLevel`: a PermissionLevel raw value.
+    var decision: String?, level: String?
 }
 
 enum BridgeEncoding {
@@ -160,10 +184,10 @@ enum BridgeEncoding {
                     status: q.status, updatedAt: q.updatedAt.timeIntervalSince1970 * 1000)
     }
 
-    static func summary(_ s: ChatSession, running: Bool, status: String?, effortChoices: [String]) -> BridgeSummary {
+    static func summary(_ s: ChatSession, running: Bool, status: String?, effortChoices: [String], waiting: Bool = false) -> BridgeSummary {
         let lastReply = s.messages.last { $0.role == .assistant }
         let state: String
-        if running { state = "running" }
+        if running { state = waiting ? "waiting" : "running" }
         else if let lastReply { state = lastReply.state == .streaming ? "cancelled" : lastReply.state.rawValue }
         else { state = "empty" }
         let previewSource = lastReply?.text.isEmpty == false ? lastReply!.text : (s.messages.last?.text ?? "")
@@ -202,7 +226,9 @@ enum BridgeEncoding {
                               merge: n.merge?.title, stale: stale.contains(n.id),
                               // Offer a re-run only when a direct downstream node is behind this one.
                               downstream: b.edges.contains { $0.kind == .data && $0.source == n.id && stale.contains($0.target) } ? b.downstreamOrder(from: n.id, include: ran).count : 0,
-                              source: n.source.map { BridgeSource($0, importing: importing.contains(n.id)) })
+                              source: n.source.map { BridgeSource($0, importing: importing.contains(n.id)) },
+                              mode: n.source == nil ? sessions[n.sessionID].map { HarnessMode.resolve(project: b.project, nodeLevel: n.permissionLevel, workingDirectory: $0.workingDirectory).key } : nil,
+                              nodeLevel: n.permissionLevel?.rawValue)
         }
         let pending = b.nodes.reduce(into: Set<UUID>()) { $0.formUnion(CanvasContextBuilder.pendingEdges(board: b, nodeID: $1.id, sessions: sessions)) }
         let edges = b.edges.map { BridgeEdge(id: $0.id, kind: $0.kind, source: $0.source, target: $0.target, pending: $0.kind == .data ? pending.contains($0.id) : nil, sourceMessageID: $0.sourceMessageID) }
@@ -234,6 +260,8 @@ final class CanvasBridge: NSObject, ObservableObject, WKScriptMessageHandler {
     private var sentDrafts: [UUID: BridgeDraft] = [:]
     /// Open confirmations; each runs at most once, and only on `confirm.answer` with ok.
     private var pendingConfirms: [UUID: () -> Void] = [:]
+    /// Approval cards the page shows; unlike confirmations they survive a reload.
+    private var sentApprovals: Set<UUID> = []
     /// Where a mouse-down moves the window, as the page last reported it.
     private var dragRects: [CGRect] = [], noDragRects: [CGRect] = []
     /// The session whose panel is open (first watched ID); file drops go here.
@@ -249,6 +277,7 @@ final class CanvasBridge: NSObject, ObservableObject, WKScriptMessageHandler {
         app.objectWillChange.sink { [weak self] in self?.schedulePush() }.store(in: &observers)
         canvas.objectWillChange.sink { [weak self] in self?.schedulePush() }.store(in: &observers)
         app.attachmentDrafts.objectWillChange.sink { [weak self] in self?.schedulePush() }.store(in: &observers)
+        app.approvals.objectWillChange.sink { [weak self] in self?.schedulePush() }.store(in: &observers)
     }
 
     /// Files dropped on the open conversation panel become its attachments;
@@ -321,6 +350,20 @@ final class CanvasBridge: NSObject, ObservableObject, WKScriptMessageHandler {
         case "confirm.answer":
             guard let id = c.id, let perform = pendingConfirms.removeValue(forKey: id) else { return }
             if c.ok == true { perform() }
+        case "approval.answer":
+            guard let id = c.id, let decision = c.decision.flatMap(FolderAccessDecision.init(rawValue:)) else { return }
+            app.approvals.answer(id, decision: decision)
+        case "board.setLevel":
+            guard let id = c.boardID, let level = c.level.flatMap(PermissionLevel.init(rawValue:)),
+                  let project = canvas.library.boards.first(where: { $0.id == id })?.project, project.isTrusted else { return }
+            if level == .auto, project.level != .auto {
+                confirm(title: "把「\(project.name)」改成「自动」？", detail: "画布里的对话可以不经询问新建、修改、删除文件，运行命令并联网。只在你自己的项目里这样做。", action: "改成自动") { [canvas] in
+                    canvas.setPermissionLevel(id, level: .auto)
+                }
+            } else { canvas.setPermissionLevel(id, level: level) }
+        case "node.setLevel":
+            guard let b = c.boardID, let n = c.nodeID else { return }
+            canvas.setNodePermissionLevel(boardID: b, nodeID: n, level: c.level.flatMap(PermissionLevel.init(rawValue:)))
         case "board.create": canvas.createBoard()
         case "board.select": if let id = c.boardID { canvas.selectBoard(id) }
         case "board.rename": if let id = c.boardID, let title = c.title { canvas.renameBoard(id, title: title) }
@@ -422,12 +465,14 @@ final class CanvasBridge: NSObject, ObservableObject, WKScriptMessageHandler {
                 } else { notes.append("「\(source.title)」· \(mode) · 暂无可传入的完整回复") }
             }
             if session.remoteSessionID != nil { notes.append("当前官方会话还保留此前的历史；以下显示本轮新增的文字输入。断开连线只停止后续传入，已送达内容仍在会话历史中。") }
+            let mode = HarnessMode.resolve(project: board.project, nodeLevel: node.permissionLevel, workingDirectory: session.workingDirectory)
+            let harness = HarnessSummary.lines(provider: session.provider, mode: mode, workingDirectory: URL(fileURLWithPath: session.workingDirectory))
             if context.fork != nil { notes.append("首次发送还会通过官方 CLI 原生分叉父会话；其内部历史、工具记录不在此文字预览中展开。") }
             if !context.inherited.isEmpty { notes.append("回放继承只包含文字；父会话的图片和工具记录不随之传入。") }
             if app.attachmentDrafts.importing.contains(node.sessionID) { notes.append("附件仍在读取；完成后请刷新预览。") }
             if app.attachmentDrafts.files[node.sessionID, default: []].contains(where: \.isImage) { notes.append("图片通过独立的图片输入传入；此处显示附件名称及文字输入。") }
             evaluate(["type": "context.preview", "id": id.uuidString, "nodeID": n.uuidString,
-                      "text": app.canvasInput(prompt: prompt, sessionID: node.sessionID, context: context), "notes": notes])
+                      "text": app.canvasInput(prompt: prompt, sessionID: node.sessionID, context: context), "notes": notes, "harness": harness])
             return
         case "source.createFiles":
             guard let id = c.boardID, let x = c.x, let y = c.y else { return }
@@ -577,13 +622,14 @@ final class CanvasBridge: NSObject, ObservableObject, WKScriptMessageHandler {
         if reset {
             state.reset = true
             sentBoards = nil; sentBoard = nil; sentSummaries = [:]; sentDetails = [:]
-            sentModels = nil; sentQuotas = nil; sentDrafts = [:]
+            sentModels = nil; sentQuotas = nil; sentDrafts = [:]; sentApprovals = []
         }
 
+        let waitingSessions = Set(app.approvals.pending.map(\.request.sessionID))
         let boards = canvas.library.boards.map { b in
             BridgeBoardSummary(id: b.id, title: b.title, nodeCount: b.nodes.count, project: b.project.map {
-                .init(path: NSString(string: $0.path).abbreviatingWithTildeInPath, name: $0.name, trusted: $0.trusted, missing: !FileManager.default.fileExists(atPath: $0.path))
-            })
+                .init(path: NSString(string: $0.path).abbreviatingWithTildeInPath, name: $0.name, trusted: $0.trusted, missing: !FileManager.default.fileExists(atPath: $0.path), level: $0.level?.rawValue)
+            }, waiting: b.nodes.filter { waitingSessions.contains($0.sessionID) }.count)
         }
         if boards != sentBoards { state.boards = boards; sentBoards = boards }
         if let current = canvas.currentBoard {
@@ -593,7 +639,8 @@ final class CanvasBridge: NSObject, ObservableObject, WKScriptMessageHandler {
 
         var summaries: [BridgeSummary] = []
         for s in app.sessions {
-            let summary = BridgeEncoding.summary(s, running: app.runningSessionIDs.contains(s.id), status: app.activeStatus[s.id], effortChoices: BridgeEncoding.effortChoices(s, app: app))
+            let summary = BridgeEncoding.summary(s, running: app.runningSessionIDs.contains(s.id), status: app.activeStatus[s.id], effortChoices: BridgeEncoding.effortChoices(s, app: app),
+                                                 waiting: waitingSessions.contains(s.id))
             if sentSummaries[s.id] != summary { summaries.append(summary); sentSummaries[s.id] = summary }
         }
         let removed = sentSummaries.keys.filter { sessions[$0] == nil }
@@ -648,6 +695,16 @@ final class CanvasBridge: NSObject, ObservableObject, WKScriptMessageHandler {
         }
         // After the state that opens the node's panel.
         if let fill { insertIntoComposer(sessionID: fill.sessionID, text: fill.text) }
+        pushApprovals()
+    }
+
+    /// New cards go out as `approval.show`; answered, timed-out or stopped ones as `approval.hide`.
+    private func pushApprovals() {
+        let pending = app.approvals.pending
+        let ids = Set(pending.map(\.id))
+        for item in pending where !sentApprovals.contains(item.id) { evaluatePayload(BridgeApproval(item)) }
+        for id in sentApprovals.subtracting(ids) { evaluate(["type": "approval.hide", "id": id.uuidString]) }
+        sentApprovals = ids
     }
 
     /// The streamed tail when only the last message's text grew; nil when

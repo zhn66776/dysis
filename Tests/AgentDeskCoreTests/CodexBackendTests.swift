@@ -100,6 +100,59 @@ final class CodexBackendTests: XCTestCase {
         XCTAssertTrue(events.contains { if case .quota(let q) = $0 { return q.windows.first?.usedPercent == 55 }; return false })
     }
 
+    /// 询问 level: approvals go to the approver and its answers go back to Codex.
+    func testApprovalsAreForwardedAndAnswered() async throws {
+        try setFixtureMode("approval")
+        let asked = Recorder()
+        let approver: AgentApprover = { request in
+            await asked.add(request)
+            return request.kind == .fileChange ? .once : .conversation
+        }
+        let session = UUID()
+        let request = AgentRequest(localSessionID: session, remoteSessionID: nil, prompt: "hello", workingDirectory: fixtureDirectory, modelID: "gpt-6.1-sol", executableURL: fixtureURL,
+                                   projectAccess: true, permissionLevel: .ask, approver: approver)
+        let (events, error) = await collect(CodexBackend(executableURL: fixtureURL).stream(request))
+        XCTAssertNil(error)
+        XCTAssertTrue(events.contains(.textDelta("POLICY_untrusted")))
+        XCTAssertTrue(events.contains(.textDelta("FILE_accept")))
+        XCTAssertTrue(events.contains(.textDelta("CMD_acceptForSession")))
+        let requests = await asked.items
+        XCTAssertEqual(requests.map(\.kind), [.fileChange, .command])
+        XCTAssertEqual(requests.first?.files, ["/p/a.txt"])
+        XCTAssertTrue(requests.first?.diff?.contains("+new") == true, "the patch comes from the file-change item")
+        XCTAssertEqual(requests.last?.command, "git push")
+        XCTAssertEqual(requests.last?.cwd, "/p")
+        XCTAssertEqual(requests.last?.reason, "push the branch")
+        XCTAssertTrue(requests.allSatisfy { $0.sessionID == session })
+    }
+
+    func testApprovalsWithoutAnApproverAreDeclined() async throws {
+        try setFixtureMode("approval")
+        let request = AgentRequest(localSessionID: UUID(), remoteSessionID: nil, prompt: "hello", workingDirectory: fixtureDirectory, modelID: "gpt-6.1-sol", executableURL: fixtureURL,
+                                   projectAccess: true, permissionLevel: .readOnly)
+        let (events, error) = await collect(CodexBackend(executableURL: fixtureURL).stream(request))
+        XCTAssertNil(error)
+        XCTAssertTrue(events.contains(.textDelta("FILE_decline")))
+        XCTAssertTrue(events.contains(.textDelta("CMD_decline")))
+    }
+
+    func testAutomaticProjectsStillAcceptWithoutAsking() async throws {
+        try setFixtureMode("approval")
+        let approver: AgentApprover = { _ in XCTFail("自动 never asks"); return .deny }
+        let request = AgentRequest(localSessionID: UUID(), remoteSessionID: nil, prompt: "hello", workingDirectory: fixtureDirectory, modelID: "gpt-6.1-sol", executableURL: fixtureURL,
+                                   projectAccess: true, approver: approver)
+        let (events, error) = await collect(CodexBackend(executableURL: fixtureURL).stream(request))
+        XCTAssertNil(error)
+        XCTAssertTrue(events.contains(.textDelta("POLICY_never")))
+        XCTAssertTrue(events.contains(.textDelta("FILE_accept")))
+        XCTAssertTrue(events.contains(.textDelta("CMD_accept")))
+    }
+
+    private actor Recorder {
+        var items: [ApprovalRequest] = []
+        func add(_ item: ApprovalRequest) { items.append(item) }
+    }
+
     private func setFixtureMode(_ mode: String) throws {
         try mode.write(to: fixtureDirectory.appendingPathComponent("mode"), atomically: true, encoding: .utf8)
     }
@@ -154,6 +207,19 @@ for line in sys.stdin:
         send({"id": ident, "result": {"thread": {"id": "thr-fixture"}}})
     elif method == "thread/resume":
         send({"id": ident, "result": {"thread": {"id": "thr-resumed"}}})
+    elif ident == "srv-1" and "result" in msg:
+        send({"method": "item/agentMessage/delta", "params": {"threadId": "thr-fixture", "turnId": "turn-fixture", "itemId": "item-fixture", "delta": "FILE_" + msg["result"]["decision"]}})
+        send({"id": "srv-2", "method": "item/commandExecution/requestApproval", "params": {"threadId": "thr-fixture", "turnId": "turn-fixture", "itemId": "cmd-1", "startedAtMs": 1, "command": "git push", "cwd": "/p", "reason": "push the branch"}})
+    elif ident == "srv-2" and "result" in msg:
+        send({"method": "item/agentMessage/delta", "params": {"threadId": "thr-fixture", "turnId": "turn-fixture", "itemId": "item-fixture", "delta": "CMD_" + msg["result"]["decision"]}})
+        send({"method": "turn/completed", "params": {"threadId": "thr-fixture", "turn": {"id": "turn-fixture", "status": "completed"}}})
+    elif method == "turn/start" and mode == "approval":
+        send({"id": ident, "result": {"turn": {"id": "turn-fixture"}}})
+        policy = msg.get("params", {}).get("approvalPolicy", "OMITTED")
+        assert ('approval_policy="%s"' % policy) in sys.argv
+        send({"method": "item/agentMessage/delta", "params": {"threadId": "thr-fixture", "turnId": "turn-fixture", "itemId": "item-fixture", "delta": "POLICY_" + policy}})
+        send({"method": "item/started", "params": {"threadId": "thr-fixture", "turnId": "turn-fixture", "item": {"type": "fileChange", "id": "fc-1", "status": "inProgress", "changes": [{"path": "/p/a.txt", "kind": {"type": "update"}, "diff": "-old\n+new"}]}}})
+        send({"id": "srv-1", "method": "item/fileChange/requestApproval", "params": {"threadId": "thr-fixture", "turnId": "turn-fixture", "itemId": "fc-1", "startedAtMs": 1, "reason": None}})
     elif method == "turn/start":
         if mode == "turn-error":
             send({"id": ident, "error": {"code": -32000, "message": "fixture turn failure"}})

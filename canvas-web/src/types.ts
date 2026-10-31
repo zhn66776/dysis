@@ -2,12 +2,19 @@
 // Protocol: design/CANVAS.md §4.2.
 
 export type Provider = 'claude' | 'codex' | 'grok' | 'gemini'
-export type SessionState = 'empty' | 'running' | 'complete' | 'failed' | 'cancelled'
+/** waiting: running, but paused on an approval only the user can answer. */
+export type SessionState = 'empty' | 'running' | 'waiting' | 'complete' | 'failed' | 'cancelled'
 export type MessageState = 'complete' | 'streaming' | 'failed' | 'cancelled'
 
-/** A board's project folder; trusted is null until asked. */
-export interface BoardProject { path: string; name: string; trusted: boolean | null; missing: boolean }
-export interface BoardSummary { id: string; title: string; nodeCount: number; project?: BoardProject | null }
+/** Permission levels of a trusted project (design/HARNESS.md H1). */
+export type PermissionLevel = 'readOnly' | 'ask' | 'auto'
+/** What a conversation runs with: chat, or a project at a level. */
+export type HarnessMode = 'chat' | PermissionLevel
+
+/** A board's project folder; trusted is null until asked; level is set once trusted. */
+export interface BoardProject { path: string; name: string; trusted: boolean | null; missing: boolean; level?: PermissionLevel | null }
+/** waiting: nodes waiting for an approval. */
+export interface BoardSummary { id: string; title: string; nodeCount: number; project?: BoardProject | null; waiting?: number }
 
 export interface NodePayload {
   id: string
@@ -24,6 +31,10 @@ export interface NodePayload {
   downstream: number
   /** Files and MCP result nodes: read-only material, only ever a data-edge source. */
   source?: SourcePayload
+  /** Chat nodes: the mode this node's next turn runs in. */
+  mode?: HarnessMode
+  /** The node's own lower level, when set. */
+  nodeLevel?: PermissionLevel
 }
 
 export type FileKind = 'image' | 'pdf' | 'document' | 'text'
@@ -141,8 +152,23 @@ export interface Region { x: number; y: number; w: number; h: number }
 
 export interface SearchHit { nodeID: string; messageID?: string; excerpt: string }
 export interface SearchResults { type: 'search.results'; id: string; boardID: string; query: string; hits: SearchHit[] }
-export interface ContextPreview { type: 'context.preview'; id: string; nodeID: string; text: string; notes: string[] }
-export type Incoming = StatePayload | ComposerInsert | ConfirmShow | ChromeInsets | SearchResults | ContextPreview
+/** harness: the read-only "本轮的 harness 设置" lines. */
+export interface ContextPreview { type: 'context.preview'; id: string; nodeID: string; text: string; notes: string[]; harness?: string[] }
+
+export type ApprovalKind = 'command' | 'fileChange' | 'network' | 'tool'
+export type ApprovalDecision = 'once' | 'conversation' | 'deny'
+/** A CLI asks before an action its permission level does not allow; the turn waits. */
+export interface ApprovalShow {
+  type: 'approval.show'; id: string; sessionID: string; kind: ApprovalKind; title: string
+  command?: string; cwd?: string; files: string[]; diff?: string; reason?: string
+  /** What "本会话内都允许" covers. */
+  sessionScope?: string
+  /** No answer by then is a no (ms since 1970). */
+  expiresAt: number
+}
+/** Answered elsewhere, timed out, or the turn stopped. */
+export interface ApprovalHide { type: 'approval.hide'; id: string }
+export type Incoming = StatePayload | ComposerInsert | ConfirmShow | ChromeInsets | SearchResults | ContextPreview | ApprovalShow | ApprovalHide
 
 export type Command =
   | { type: 'ready' }
@@ -185,6 +211,9 @@ export type Command =
   | { type: 'chain.downstream'; boardID: string; nodeID: string }
   | { type: 'chain.stop' }
   | { type: 'confirm.answer'; id: string; ok: boolean }
+  | { type: 'approval.answer'; id: string; decision: ApprovalDecision }
+  | { type: 'board.setLevel'; boardID: string; level: PermissionLevel }
+  | { type: 'node.setLevel'; boardID: string; nodeID: string; level: PermissionLevel | null }
   | { type: 'chrome.regions'; drag: Region[]; noDrag: Region[] }
   | { type: 'source.createFiles'; boardID: string; x: number; y: number }
   | { type: 'source.addFiles'; boardID: string; nodeID: string }

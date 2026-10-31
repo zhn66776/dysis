@@ -152,7 +152,7 @@ struct AttachmentNotice: View {
                 Text("文档以提取文字发送；内嵌图片、版式及扫描页不会自动作为视觉输入。长文档可能截取部分内容。")
             }
             if !supportsImages && attachments.contains(where: \.isImage) {
-                Text("当前 Cursor 连接暂不支持图片输入，请选择 Claude 或 ChatGPT。")
+                Text("当前 Cursor 连接暂不支持图片输入，请选择 Claude Code 或 Codex。")
                     .foregroundStyle(Theme.warn)
             }
             ForEach(attachments.filter { !$0.isImage && $0.extractionNote != nil }) { file in

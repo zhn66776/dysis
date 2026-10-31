@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { send } from './bridge'
+import { levelDetail, levelLabel, levels } from './harness'
 import { projectStatus } from './projects'
 import type { AppState, BoardSummary } from './types'
 
@@ -16,6 +17,14 @@ function ProjectRow({ board }: { board: BoardSummary }) {
   return (
     <div className="project-row" title={p.path}>
       <div className={`project-status${p.trusted === true && !p.missing ? ' trusted' : ''}`}>{projectStatus(p)}</div>
+      {p.trusted === true && (
+        <div className="level-switch" role="radiogroup" aria-label="权限档位">
+          {levels.map(l => (
+            <button key={l} role="radio" aria-checked={(p.level ?? 'auto') === l} className={(p.level ?? 'auto') === l ? 'on' : ''} title={levelDetail[l]}
+              onClick={e => { e.stopPropagation(); if ((p.level ?? 'auto') !== l) send({ type: 'board.setLevel', boardID: board.id, level: l }) }}>{levelLabel[l]}</button>
+          ))}
+        </div>
+      )}
       <div className="project-actions">
         <button className="link" onClick={e => { e.stopPropagation(); send({ type: 'board.reveal', boardID: board.id }) }}>在访达中显示</button>
         {p.trusted === true
@@ -60,6 +69,7 @@ export function Sidebar({ state, collapsed, onToggle }: { state: AppState; colla
             ) : (
               <>
                 <span className="board-title">{b.title}{b.project && <span className="board-folder" title={b.project.path}>{b.project.path}</span>}</span>
+                {(b.waiting ?? 0) > 0 && <span className="waiting-count" title={`${b.waiting} 个节点等你确认`}>{b.waiting}</span>}
                 <span className="count">{b.nodeCount}</span>
                 <button className="del" aria-label={`删除画布 ${b.title}`} onClick={e => { e.stopPropagation(); send({ type: 'board.delete', boardID: b.id }) }}>✕</button>
               </>

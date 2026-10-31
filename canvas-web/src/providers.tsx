@@ -2,9 +2,18 @@ import type { Provider } from './types'
 
 export const providers: Provider[] = ['claude', 'codex', 'grok', 'gemini']
 
+/** The harness that runs the node (design/HARNESS.md H0), not the chat product. */
 export const providerName: Record<Provider, string> = {
-  claude: 'Claude', codex: 'ChatGPT', grok: 'Grok', gemini: 'Gemini',
+  claude: 'Claude Code', codex: 'Codex', grok: 'Cursor · Grok', gemini: 'Cursor · Gemini',
 }
+
+/** The subscription the official CLI signs in with. */
+export const providerAccount: Record<Provider, string> = {
+  claude: 'Claude 订阅', codex: 'ChatGPT 账号', grok: 'Cursor 订阅', gemini: 'Cursor 订阅',
+}
+
+/** e.g. "Codex · ChatGPT 账号". */
+export const providerSubtitle = (p: Provider) => `${providerName[p]} · ${providerAccount[p]}`
 
 /** Main colour per provider; head tints live in styles.css (--p-<id>-tint). */
 export const providerColor: Record<Provider, string> = {

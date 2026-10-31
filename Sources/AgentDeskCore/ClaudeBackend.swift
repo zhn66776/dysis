@@ -24,7 +24,8 @@ public struct ClaudeBackend: AgentBackend, Sendable {
                     // A files call can wait for the user's answer (FolderAccessServer.timeout).
                     if !request.mcpServers.isEmpty { environment["MCP_TOOL_TIMEOUT"] = String(FolderAccessPolicy.toolTimeoutSeconds * 1000) }
 
-                    var arguments = try ClaudeBackend.commonArguments(modelID: request.modelID, effort: request.reasoningEffort, mcpServers: request.mcpServers, project: request.projectAccess)
+                    var arguments = try ClaudeBackend.commonArguments(modelID: request.modelID, effort: request.reasoningEffort, mcpServers: request.mcpServers, project: request.projectAccess,
+                                                                      level: request.permissionLevel, approvalTool: FolderAccessPolicy.approvalTool(in: request.mcpServers))
                     arguments += try ClaudeBackend.sessionArguments(for: request)
                     let fork = request.remoteSessionID?.isEmpty == false ? nil : request.forkFrom
                     let imageContent = try MultimodalInputSupport.claudeContent(prompt: request.prompt, images: request.images)
@@ -179,12 +180,21 @@ public struct ClaudeBackend: AgentBackend, Sendable {
     /// trusted project folder (`project`) Claude Code works as it does in a
     /// terminal there: all built-in tools, no permission prompts, the
     /// project's and the user's settings loaded; MCP is still only ours.
+    /// Below the automatic level (`level`) the permission mode is `default`:
+    /// what the level allows is pre-allowed with --allowedTools, and every
+    /// other prompt goes to `approvalTool` (AgentDesk's approval card), or is
+    /// denied when there is none.
     static let maxProjectTurns = 100
 
-    static func commonArguments(modelID: String, effort: String?, mcpServers: [AgentMCPServer] = [], project: Bool = false) throws -> [String] {
+    static func commonArguments(modelID: String, effort: String?, mcpServers: [AgentMCPServer] = [], project: Bool = false,
+                                level: PermissionLevel = .auto, approvalTool: String? = nil) throws -> [String] {
         if project {
-            var arguments = ["--strict-mcp-config", "--mcp-config", try mcpConfigJSON(mcpServers),
-                             "--permission-mode", "bypassPermissions", "--max-turns", String(maxProjectTurns), "--model", modelID,
+            let permissions = level == .auto ? ["--permission-mode", "bypassPermissions"]
+                : ["--permission-mode", "default", "--permission-prompts", approvalTool == nil ? "none" : "host"]
+                    + (approvalTool.map { ["--permission-prompt-tool", $0] } ?? [])
+                    + ["--allowedTools", preallowedTools(level: level, mcpServers: mcpServers).joined(separator: ",")]
+            var arguments = ["--strict-mcp-config", "--mcp-config", try mcpConfigJSON(mcpServers)] + permissions + [
+                             "--max-turns", String(maxProjectTurns), "--model", modelID,
                              "--output-format", "stream-json", "--verbose", "--include-partial-messages"]
             if let effort = try normalizedEffort(effort) { arguments += ["--effort", effort] }
             return arguments
@@ -204,6 +214,15 @@ public struct ClaudeBackend: AgentBackend, Sendable {
         ]
         if let effort = try normalizedEffort(effort) { arguments += ["--effort", effort] }
         return arguments
+    }
+
+    /// What a level runs without asking: reading the folder, and at 询问
+    /// editing inside it (`./**` is relative to the working directory). The
+    /// MCP servers the user opened stay callable.
+    static func preallowedTools(level: PermissionLevel, mcpServers: [AgentMCPServer]) -> [String] {
+        let read = ["Read(./**)", "Glob", "Grep", "LS", "TodoWrite"]
+        let write = level >= .ask ? ["Edit(./**)"] : []
+        return read + write + mcpServers.map { "mcp__\($0.name)" }
     }
 
     private static func normalizedEffort(_ raw: String?) throws -> String? {

@@ -115,8 +115,26 @@ final class CanvasModel: ObservableObject {
         update(boardID) { $0.project = CanvasProject(path: folder.path) }
     }
 
+    /// A newly trusted project starts at 询问; one trusted before levels
+    /// existed keeps no level and so stays automatic.
     func setTrust(_ boardID: UUID, trusted: Bool) {
-        update(boardID) { $0.project?.trusted = trusted }
+        update(boardID) { board in
+            if trusted, board.project?.trusted != true { board.project?.permissionLevel = .ask }
+            board.project?.trusted = trusted
+        }
+    }
+
+    func setPermissionLevel(_ boardID: UUID, level: PermissionLevel) {
+        update(boardID) { if $0.project?.isTrusted == true { $0.project?.permissionLevel = level } }
+    }
+
+    /// A node can only go below its board's level; nil follows the board.
+    func setNodePermissionLevel(boardID: UUID, nodeID: UUID, level: PermissionLevel?) {
+        update(boardID) { board in
+            guard let i = board.nodes.firstIndex(where: { $0.id == nodeID }), board.nodes[i].source == nil else { return }
+            if let level, let boardLevel = board.project?.level, level < boardLevel { board.nodes[i].permissionLevel = level }
+            else { board.nodes[i].permissionLevel = nil }
+        }
     }
 
     /// The trust question comes once per project, before its first conversation.
@@ -470,7 +488,7 @@ final class CanvasModel: ObservableObject {
         let draftImages = app.attachmentDrafts.files[node.sessionID, default: []].filter(\.isImage).count
         let context = CanvasContextBuilder.context(board: board, nodeID: nodeID, sessions: sessionsByID,
                                                    imageBudget: CanvasContextBuilder.maxImagesPerTurn - draftImages)
-        guard app.send(text, to: node.sessionID, context: context, project: board.project) else { return false }
+        guard app.send(text, to: node.sessionID, context: context, project: board.project, nodeLevel: node.permissionLevel) else { return false }
         if context.fork != nil, let edge = board.inheritEdge(into: nodeID) { pendingForks[node.sessionID] = (boardID, edge.id) }
         // Each upstream reply and source version is delivered once; a new one makes the edge pending again.
         let delivered = context.deliveries

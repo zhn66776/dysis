@@ -354,3 +354,40 @@ input, textarea { font: inherit; color: var(--tx); }
 .group-dissolve { background: transparent; border: 1px solid transparent; color: var(--mu); font-size: 11px; padding: 2px 6px; border-radius: 5px; }
 .group-dissolve:hover { background: var(--card); border-color: var(--bd2); color: var(--tx); }
 .group-rename { width: 160px; min-width: 30px; background: var(--card); border: 1px solid var(--bd2); border-radius: 4px; padding: 1px 4px; font-size: 13px; }
+
+/* Harness modes and approvals (design/HARNESS.md H0, H1) */
+:root { --wait: #93590E; --wait-bg: #FAEEDA; --diff-add: #DDF2E4; --diff-del: #F9E1E1; }
+@media (prefers-color-scheme: dark) { :root { --wait: #FAC775; --wait-bg: #3A2A12; --diff-add: #143322; --diff-del: #3A1A1A; } }
+.status-waiting { color: var(--wait); font-weight: 500; }
+.node.state-waiting { box-shadow: 0 0 0 1.5px var(--wait); }
+.node-badge.waiting-badge { background: var(--wait-bg); color: var(--wait); font-weight: 500; }
+.waiting-count { font-size: 10px; font-weight: 600; min-width: 16px; padding: 0 5px; border-radius: 8px; background: var(--wait-bg); color: var(--wait); text-align: center; }
+.mode-tag { font-size: 10px; padding: 0 5px; margin-right: 6px; border-radius: 4px; background: var(--chip); color: var(--mu); white-space: nowrap; font-family: var(--sans); }
+.mode-tag.mode-auto { background: var(--wait-bg); color: var(--wait); }
+.mode-picker .dd-button { padding: 1px 4px; }
+.mode-picker .mode-tag { margin-right: 0; font-size: 11px; }
+.mode-chip { font-size: 11px; }
+.panel-subtitle { margin-top: 2px; padding-left: 26px; font-size: 11px; }
+.menu-detail { margin-left: auto; padding-left: 12px; font-size: 11px; color: var(--mu2); }
+.level-switch { display: inline-flex; margin: 4px 0 2px; border: 1px solid var(--bd2); border-radius: 6px; overflow: hidden; }
+.level-switch button { font-size: 11px; padding: 2px 9px; background: transparent; color: var(--mu); border: 0; }
+.level-switch button + button { border-left: 1px solid var(--bd2); }
+.level-switch button.on { background: var(--card); color: var(--tx); font-weight: 500; }
+.level-switch button:hover:not(.on) { background: var(--sel); color: var(--tx); }
+.approval-card { margin: 8px 14px 0; padding: 10px 12px; border-radius: 10px; border: 1.5px solid var(--wait); background: var(--card); font-size: 12px; user-select: text; }
+.approval-head { display: flex; align-items: center; gap: 8px; }
+.approval-head strong { font-size: 13px; }
+.approval-kind { font-size: 10px; padding: 1px 6px; border-radius: 4px; background: var(--wait-bg); color: var(--wait); font-weight: 500; }
+.approval-command, .approval-diff { margin: 8px 0 0; padding: 7px 9px; border-radius: 6px; background: var(--chip); font: 11.5px/1.5 var(--mono); white-space: pre-wrap; word-break: break-all; max-height: 220px; overflow: auto; }
+.approval-diff .add { background: var(--diff-add); }
+.approval-diff .del { background: var(--diff-del); }
+.approval-meta { margin-top: 5px; word-break: break-all; }
+.approval-reason { margin-top: 7px; line-height: 1.5; }
+.approval-actions { display: flex; align-items: center; gap: 6px; margin-top: 10px; }
+.btn.primary { background: var(--primary); border-color: var(--primary); color: var(--on-primary); font-weight: 500; }
+.btn.primary:hover { opacity: 0.9; border-color: var(--primary); }
+.approval-foot { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 7px; }
+.cursor-note { justify-content: flex-start; }
+.harness-settings { margin: 12px 0 0; flex-shrink: 0; padding: 8px 10px; border-radius: 8px; background: var(--chip); font-size: 12px; }
+.harness-title { font-weight: 600; margin-bottom: 4px; }
+.harness-line { line-height: 1.6; color: var(--tx); word-break: break-all; }

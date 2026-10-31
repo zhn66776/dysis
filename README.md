@@ -4,9 +4,9 @@ A personal, native macOS SwiftUI chat app. Each conversation belongs to one prov
 
 ## Included in 0.3.0
 
-- Claude through the official Claude Code CLI, using Claude subscription login.
-- ChatGPT through the official Codex app-server, using managed ChatGPT login.
-- Grok and Gemini through the official Cursor CLI and the user's existing Cursor plan. Gemini here does not consume Google AI Pro quota.
+- **Claude Code** (the official CLI, Claude subscription login).
+- **Codex** (the official Codex app-server, ChatGPT account login). This is Codex's agent loop, shell and `apply_patch`, not ChatGPT's cloud agent; the UI names it "Codex · ChatGPT 账号".
+- **Cursor · Grok** and **Cursor · Gemini** through the official Cursor CLI and the user's existing Cursor plan. Gemini here does not consume Google AI Pro quota.
 - Streaming responses, stop generation, separate concurrent conversations, local history, rename, search and delete local records.
 - Provider settings, connection checks and model discovery. Connection checks do not start model turns.
 
@@ -128,7 +128,17 @@ Select a tool, inspect its input schema, enter JSON arguments and click **运行
 
 **＋ 新画布** asks how the board starts: **新建项目文件夹** (an empty folder under `~/AgentDesk Projects/`, named after the board), **打开已有文件夹…**, or **只建画布** (as before, each conversation in its own folder under the data folder). On a project board every conversation's working directory is the project folder. Before its first conversation AgentDesk asks once whether to trust the folder; the answer applies to every conversation and every provider on the board, and the sidebar under the selected board shows it with **在访达中显示** and **信任… / 取消信任** (a plain board shows **关联文件夹…**; conversations already on it keep their folders). Deleting a project board never deletes the folder.
 
-In a trusted project each CLI works as it does in a terminal there, with writes and commands (network included) and no prompts: Claude Code with its built-in tools and `--permission-mode bypassPermissions` (no `--safe-mode`/`--restricted`, so the project's and the user's Claude settings load; up to 100 turns; MCP still only through `--strict-mcp-config`); Codex with the shell on, `sandbox_mode="workspace-write"`, `sandbox_workspace_write.network_access=true` and its own instructions (computer use, browser use, plugins, apps, multi-agent and memories stay off); Cursor in agent mode with `--force --sandbox disabled`. Cursor's MCP files go in the project's `.cursor/`; files AgentDesk did not write there (tracked in `.cursor/.agentdesk-managed`) are never replaced or removed. An untrusted project chats as an ordinary board. Keep secrets such as a paper-trading API key in a file in the project (for example `.env`) that the model's own scripts read; AgentDesk does not read or store them.
+A trusted project has a permission level (design/HARNESS.md H1), switched under the board in the sidebar: **只读**, **询问** or **自动**. A newly trusted project starts at 询问; projects trusted before levels existed stay at 自动, so their behaviour did not change. Switching to 自动 asks for confirmation. A node can go lower than its board from the mode chip in its panel ("跟随画布" or "只在这个节点用…"). Node cards and the panel show the mode: 聊天 / 项目 · 只读 / 项目 · 询问 / 项目 · 自动. In every project mode Claude Code loads the project's and the user's settings (no `--safe-mode`/`--restricted`, up to 100 turns, MCP still only through `--strict-mcp-config`), and Codex keeps its own instructions with the shell on (computer use, browser use, plugins, apps, multi-agent and memories stay off).
+
+| | 只读 | 询问 | 自动 |
+|---|---|---|---|
+| Claude Code | `--permission-mode default`; `--allowedTools` pre-allows reading the folder (`Read(./**)`, Glob, Grep, LS); everything else asks | as 只读 plus `Edit(./**)`: edits inside the folder run, commands, network and edits elsewhere ask | `--permission-mode bypassPermissions` |
+| Codex | `sandbox_mode="read-only"`, `approvalPolicy: "untrusted"` | `workspace-write` without network, `approvalPolicy: "untrusted"` | `workspace-write` with network, `approvalPolicy: "never"` |
+| Cursor | `--mode ask` | agent mode, sandbox on, `.cursor/cli.json` allows `Read(**)`, `Write(**)` and denies `Shell(*)` | `--force --sandbox disabled` |
+
+Below 自动, a question appears as an approval card at the top of the node's panel: the command and working directory, or the files and their diff, and the model's reason. **允许一次**, **本会话内都允许** (the same command, the same file or the same site for the rest of the conversation; Codex keeps its own session cache via `acceptForSession`) or **拒绝**. The turn waits meanwhile: the node shows **等你确认** and the state **等待确认**, and the sidebar counts waiting nodes per board. Several questions queue in order. No answer within 120 seconds, or stopping the turn, is a no. Codex's `item/commandExecution/requestApproval` and `item/fileChange/requestApproval` are answered in process (`accept` / `acceptForSession` / `decline`; `approvalsReviewer: "user"`, so no automatic reviewer decides). Claude Code asks through `--permission-prompts host --permission-prompt-tool mcp__agentdesk_files__approve`: the `agentdesk-files` helper (started with `--approvals <folder>`, and `--no-files` when folder access is off) writes the request to `approval-requests/` in the data folder like a folder request and returns Claude Code's allow/deny answer; session answers are kept in `approval-grants/<conversation>.json`. Without the helper every prompt is denied (`--permission-prompts none`). Cursor's `--print` has no approval callback, so below 自动 it gets the static rules above and the panel says that Cursor cannot run commands at that level; a project's own `.cursor/cli.json` is left alone and the node then runs read-only. The context preview (**预览本轮输入**) lists the turn's harness settings: harness and account, mode, permissions, working directory and the rule files the CLI reads from the folder.
+
+Cursor's MCP files go in the project's `.cursor/`; files AgentDesk did not write there (tracked in `.cursor/.agentdesk-managed`) are never replaced or removed. An untrusted project chats as an ordinary board. Keep secrets such as a paper-trading API key in a file in the project (for example `.env`) that the model's own scripts read; AgentDesk does not read or store them.
 
 ### Folder access
 

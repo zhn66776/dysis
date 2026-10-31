@@ -1,11 +1,13 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { ApprovalCard } from './ApprovalCard'
 import { Reply } from './Reply'
 import { ContextInspector } from './ContextInspector'
 import { send } from './bridge'
 import { ContextMeter, Dropdown, EffortPicker, ModelPicker, QuotaMeter } from './Controls'
-import { ProviderMark } from './providers'
+import { cursorNote, levelDetail, levelLabel, modeLabel, nodeLevelChoices } from './harness'
+import { ProviderMark, providerSubtitle } from './providers'
 import { composerHint, dataInputs, formatBytes, imageNotes, kindLabel } from './sources'
-import type { AppState, MessagePayload, NodePayload } from './types'
+import type { AppState, ApprovalShow, MessagePayload, NodePayload } from './types'
 
 interface Props {
   state: AppState
@@ -15,9 +17,12 @@ interface Props {
   onClose(): void
   composerFocus: number
   messageFocus: { messageID?: string; request: number } | null
+  /** This node's open approvals, oldest first. */
+  approvals: ApprovalShow[]
+  onApprovalAnswered(id: string): void
 }
 
-export function ChatPanel({ state, node, draft, onDraft, onClose, composerFocus, messageFocus }: Props) {
+export function ChatPanel({ state, node, draft, onDraft, onClose, composerFocus, messageFocus, approvals, onApprovalAnswered }: Props) {
   const board = state.board!
   const summary = state.summaries[node.sessionID]
   const detail = state.details[node.sessionID]
@@ -51,6 +56,8 @@ export function ChatPanel({ state, node, draft, onDraft, onClose, composerFocus,
 
   if (!summary) return null
   const notes = imageNotes(upstream, summary.provider)
+  const boardLevel = state.boards.find(b => b.id === board.id)?.project?.level ?? null
+  const cursor = cursorNote(summary.provider, node.mode)
 
   const files = state.drafts[node.sessionID]
   const importing = files?.importing ?? false
@@ -80,9 +87,21 @@ export function ChatPanel({ state, node, draft, onDraft, onClose, composerFocus,
           )}
           <button className="icon-btn" aria-label="关闭面板" onClick={onClose}>✕</button>
         </div>
+        <div className="panel-subtitle sub">{providerSubtitle(summary.provider)}</div>
         <div className="controls-row">
           <ModelPicker state={state} summary={summary} locked={running} />
           <EffortPicker summary={summary} locked={running} />
+          {node.mode && (node.mode === 'chat' || !boardLevel
+            ? <span className="chip mode-chip" title="不在信任的项目文件夹里：只聊天，不用工具">{modeLabel(node.mode)}</span>
+            : <Dropdown className="mode-picker" align="right" disabled={running} title="这个节点的权限档位；只能比画布低"
+                label={<span className={`mode-tag mode-${node.mode}`}>{modeLabel(node.mode)}</span>}
+                items={[
+                  { key: 'board', label: `跟随画布（${levelLabel[boardLevel]}）`, detail: levelDetail[boardLevel], checked: !node.nodeLevel, onSelect: () => send({ type: 'node.setLevel', boardID: board.id, nodeID: node.id, level: null }) },
+                  ...nodeLevelChoices(boardLevel).filter(l => l !== boardLevel).map(l => ({
+                    key: l, label: `只在这个节点用「${levelLabel[l]}」`, detail: levelDetail[l], checked: node.nodeLevel === l,
+                    onSelect: () => send({ type: 'node.setLevel', boardID: board.id, nodeID: node.id, level: l }),
+                  })),
+                ]} />)}
           <span className="spacer" />
           <span className="chip meta" title={summary.remoteShort ? '官方会话 ID' : '第一次发送后由官方 CLI 创建会话'}>{summary.remoteShort ? `${summary.remoteShort}…` : '尚未开始'}</span>
         </div>
@@ -92,6 +111,8 @@ export function ChatPanel({ state, node, draft, onDraft, onClose, composerFocus,
         </div>
       </header>
 
+      {approvals[0] && <ApprovalCard key={approvals[0].id} approval={approvals[0]} queued={approvals.length - 1} onAnswer={onApprovalAnswered} />}
+      {cursor && <div className="stale-banner neutral cursor-note">{cursor}</div>}
       {node.stale && !running && (
         <div className="stale-banner">
           <span>上游有新的输出，这个回答可能已经过期。</span>
